@@ -7,6 +7,17 @@ local.properties
 
 # Log/OS Files
 *.log
+.DS_Store
+
+# Server
+server/.venv/
+server/chatcontroll.db
+server/.env
+!server/.env.example
+
+# Keystore & credentials
+keystore-base64.txt
+google-services-base64.txt
 
 # Android Studio generated files and folders
 captures/

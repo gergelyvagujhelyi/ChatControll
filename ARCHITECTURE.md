@@ -1,0 +1,101 @@
+# Architecture Decision Record
+
+## ADR-1: Clean Architecture with MVVM
+
+**Decision**: Separate the app into UI, domain, data, and crypto layers with strict dependency rules.
+
+**Why**: The crypto layer and transport layer are the most likely components to change (new PQC library, new backend). Clean boundaries make these swappable without touching UI or business logic. MVVM with StateFlow gives reactive, testable ViewModels that work naturally with Compose.
+
+**Tradeoff**: More boilerplate than a single-module app. Acceptable for a security-critical application where correctness and maintainability matter more than initial velocity.
+
+---
+
+## ADR-2: Hilt over Koin
+
+**Decision**: Use Hilt for dependency injection.
+
+**Why**: Compile-time verification of the DI graph catches configuration errors early. First-class support for Android components (ViewModels, WorkManager, Services). Scoping lifecycle is handled automatically.
+
+**Tradeoff**: Heavier annotation processing than Koin. Worth it for the safety guarantees in a security-sensitive app.
+
+---
+
+## ADR-3: SQLCipher-backed Room database
+
+**Decision**: Encrypt the local database with SQLCipher, keyed from Android Keystore.
+
+**Why**: The database contains encrypted message blobs, conversation metadata, and contact keys. Even though message bodies are encrypted at the application layer, metadata (who talked to whom, when) is sensitive. SQLCipher encrypts the entire database file at rest.
+
+**Tradeoff**: ~2MB APK size increase. Minor performance overhead on queries (negligible for chat workloads).
+
+---
+
+## ADR-4: Hybrid classical + post-quantum key establishment
+
+**Decision**: Combine X25519 ECDH with ML-KEM-768 via HKDF, behind a `CryptoEngine` interface.
+
+**Why**: X25519 is battle-tested and provides strong classical security today. ML-KEM-768 (FIPS 203) provides quantum resistance. The hybrid approach means:
+- If the PQC component is broken, classical security remains.
+- If classical crypto is broken by a quantum computer, the PQC component provides protection.
+- The `CryptoEngine` interface allows swapping implementations without redesigning the app.
+
+**Current state**: ML-KEM is implemented as a mock (`MockPqcProvider`). The classical X25519 component provides the actual security. The hybrid plumbing is fully functional and ready for a real ML-KEM library.
+
+**Tradeoff**: Larger key bundles and slight handshake overhead. Acceptable for a messaging app where handshakes are infrequent.
+
+---
+
+## ADR-5: Anonymous guest identity
+
+**Decision**: Generate cryptographic identity on first launch with no PII.
+
+**Why**: Traditional registration (email/phone) creates a correlation point. A locally-generated Ed25519 signing key + X25519 identity key serves as the user's identity. Discovery happens via share codes (truncated hash of the public key).
+
+**Tradeoffs**:
+- **No account recovery**: If the device is lost, the identity is gone. This is a deliberate privacy choice. Opt-in encrypted backup could be added later.
+- **No server-side identity verification**: The server cannot verify that a user "owns" an identity beyond possession of the private key.
+- **Spam/abuse**: Without registration friction, spam is easier. Mitigated by share-code-based contact discovery (you must know someone's code to message them).
+
+---
+
+## ADR-6: FCM as wake-up signal only
+
+**Decision**: Use Firebase Cloud Messaging to wake the device, but never send message content through FCM.
+
+**Why**: FCM payloads pass through Google's infrastructure. Even if encrypted, metadata (sender, timing) would be visible. Instead, the FCM notification contains only a generic "new message" signal. The app then fetches the encrypted envelope directly from the relay server.
+
+**Tradeoff**: Slightly higher latency (FCM wake-up + fetch) vs. including the payload in the push. Worth the privacy improvement.
+
+---
+
+## ADR-7: Mock API service layer
+
+**Decision**: Define the full API contract as an interface (`ApiService`) with an in-process mock implementation for development.
+
+**Why**: Allows the full app to run without a backend server. The interface contract is well-defined, making it straightforward to swap in a real Ktor client implementation. The mock maintains in-memory state, simulating the relay server's behavior.
+
+**Tradeoff**: Mock doesn't simulate network latency, failures, or concurrent access from multiple devices. These must be tested with a real backend.
+
+---
+
+## ADR-8: Privacy defaults over convenience
+
+**Decision**: All privacy settings default to the most restrictive option.
+
+- Lock screen previews: hidden
+- Read receipts: off
+- Screen security: on (FLAG_SECURE)
+- Cloud backup: disabled
+- Telemetry: none
+
+**Why**: Users who want convenience can opt in. Users who want privacy shouldn't have to remember to opt out.
+
+---
+
+## ADR-9: No contact book upload
+
+**Decision**: Contact discovery is exclusively via share codes and invitation links.
+
+**Why**: Uploading contact books (even hashed) creates a social graph on the server and risks de-anonymization. Share-code-based discovery is more friction but fundamentally more private.
+
+**Tradeoff**: Less convenient onboarding. Users must manually exchange share codes. QR code scanning and invite links reduce this friction.
