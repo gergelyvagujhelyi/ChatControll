@@ -5,8 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
-    // Enable after placing google-services.json in app/
-    // alias(libs.plugins.google.services)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -14,7 +13,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.chatcontroll.app"
+        applicationId = "com.vagujhelyigergely.chatcontroll"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -46,7 +45,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField("String", "API_BASE_URL", "\"https://api.chatcontroll.app\"")
+            buildConfigField("String", "API_BASE_URL", "\"https://api.chatcontroll.vagujhelyigergely.com\"")
         }
     }
 

@@ -30,6 +30,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode google-services.json
+        if: ${{ env.GOOGLE_SERVICES_JSON != '' }}
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: echo "$GOOGLE_SERVICES_JSON" | base64 --decode > app/google-services.json
+
       - name: Decode keystore
         if: ${{ env.KEYSTORE_BASE64 != '' }}
         env:
@@ -104,7 +110,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.chatcontroll.app
+          packageName: com.vagujhelyigergely.chatcontroll
           releaseFiles: app/build/outputs/bundle/release/*.aab
           track: production
           status: completed
