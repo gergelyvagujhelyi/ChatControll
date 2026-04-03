@@ -307,10 +307,7 @@ class CallManager @Inject constructor(
 
     private suspend fun encryptPayload(peerId: String, plaintext: String): String {
         val sessionKeys = keyManager.getCachedSessionKeys(peerId)
-        if (sessionKeys == null) {
-            Log.w(TAG, "No session keys for $peerId, falling back to base64")
-            return Base64.encodeToString(plaintext.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-        }
+            ?: throw IllegalStateException("No session keys for $peerId — cannot encrypt call signal")
         val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
         // Pack as: nonce_b64.ciphertext_b64
         val nonceB64 = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP)
@@ -320,18 +317,9 @@ class CallManager @Inject constructor(
 
     private suspend fun decryptPayload(peerId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
-        if (!encrypted.contains('.')) {
-            // Legacy base64-only payload (no session keys on sender side)
-            return String(Base64.decode(encrypted, Base64.NO_WRAP), Charsets.UTF_8)
-        }
         val sessionKeys = keyManager.getCachedSessionKeys(peerId)
-        if (sessionKeys == null) {
-            Log.w(TAG, "No session keys for $peerId, cannot decrypt signal")
-            // Try as plain base64 fallback
-            return try {
-                String(Base64.decode(encrypted.substringAfter('.'), Base64.NO_WRAP), Charsets.UTF_8)
-            } catch (_: Exception) { "" }
-        }
+            ?: throw IllegalStateException("No session keys for $peerId — cannot decrypt call signal")
+        require(encrypted.contains('.')) { "Invalid encrypted payload format" }
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)

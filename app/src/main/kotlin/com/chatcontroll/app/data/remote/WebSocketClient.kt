@@ -22,8 +22,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.util.logging.Logger
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -90,7 +92,10 @@ class WebSocketClient @Inject constructor(
 
         client.webSocket("$baseUrl/v1/ws") {
             // Authenticate
-            send("""{"type":"auth","user_id":"$userId"}""")
+            send(buildJsonObject {
+                put("type", "auth")
+                put("user_id", userId)
+            }.toString())
 
             val authResponse = (incoming.receive() as? Frame.Text)?.readText()
             val authMsg = json.parseToJsonElement(authResponse ?: "{}").jsonObject

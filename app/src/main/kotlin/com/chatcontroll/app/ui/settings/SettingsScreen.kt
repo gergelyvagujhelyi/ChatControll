@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +44,11 @@ fun SettingsScreen(
     val settings by viewModel.privacySettings.collectAsState()
     val shareCode by viewModel.shareCode.collectAsState()
     val showWipeConfirmation by viewModel.showWipeConfirmation.collectAsState()
+    val wipeCompleted by viewModel.wipeCompleted.collectAsState()
+
+    LaunchedEffect(wipeCompleted) {
+        if (wipeCompleted) onWiped()
+    }
 
     if (showWipeConfirmation) {
         AlertDialog(
@@ -55,10 +61,7 @@ fun SettingsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    viewModel.confirmWipe()
-                    onWiped()
-                }) {
+                TextButton(onClick = { viewModel.confirmWipe() }) {
                     Text("Wipe", color = MaterialTheme.colorScheme.error)
                 }
             },

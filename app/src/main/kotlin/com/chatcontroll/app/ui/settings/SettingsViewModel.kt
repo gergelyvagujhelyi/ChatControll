@@ -32,6 +32,9 @@ class SettingsViewModel @Inject constructor(
     private val _showWipeConfirmation = MutableStateFlow(false)
     val showWipeConfirmation: StateFlow<Boolean> = _showWipeConfirmation.asStateFlow()
 
+    private val _wipeCompleted = MutableStateFlow(false)
+    val wipeCompleted: StateFlow<Boolean> = _wipeCompleted.asStateFlow()
+
     init {
         viewModelScope.launch {
             val identity = identityRepository.getIdentity()
@@ -83,6 +86,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.wipeLocalData()
             _showWipeConfirmation.value = false
+            _wipeCompleted.value = true
         }
     }
 }

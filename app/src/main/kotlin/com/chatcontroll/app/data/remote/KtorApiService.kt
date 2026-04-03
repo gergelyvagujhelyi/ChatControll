@@ -48,7 +48,7 @@ import javax.inject.Singleton
 @Singleton
 class KtorApiService @Inject constructor(
     private val keyManager: KeyManager,
-) : ApiService {
+) : ApiService, java.io.Closeable {
 
     private val client = HttpClient(OkHttp) {
         engine {
@@ -72,6 +72,10 @@ class KtorApiService @Inject constructor(
             url(BuildConfig.API_BASE_URL)
             contentType(ContentType.Application.Json)
         }
+    }
+
+    override fun close() {
+        client.close()
     }
 
     private fun userId(): String =

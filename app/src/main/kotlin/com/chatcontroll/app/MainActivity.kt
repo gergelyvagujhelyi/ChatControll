@@ -54,24 +54,27 @@ class MainActivity : ComponentActivity() {
             ChatControllTheme {
                 var startDestination by remember { mutableStateOf<String?>(null) }
 
+                val navController = rememberNavController()
+
                 LaunchedEffect(Unit) {
-                    startDestination = if (identityRepository.hasIdentity()) {
+                    val dest = if (identityRepository.hasIdentity()) {
                         Routes.CONVERSATIONS
                     } else {
                         Routes.ONBOARDING
                     }
-                }
+                    startDestination = dest
 
-                val navController = rememberNavController()
-
-                // Handle deep-link from notification
-                LaunchedEffect(Unit) {
-                    val conversationId = intent.getStringExtra(
-                        ChatNotificationManager.EXTRA_CONVERSATION_ID
-                    )
-                    if (conversationId != null && startDestination == Routes.CONVERSATIONS) {
-                        // Navigate to the specific conversation
-                        navController.navigate(Routes.chat(conversationId, ""))
+                    // Handle deep-link from notification (after startDestination is resolved)
+                    if (dest == Routes.CONVERSATIONS) {
+                        val conversationId = intent.getStringExtra(
+                            ChatNotificationManager.EXTRA_CONVERSATION_ID
+                        )
+                        val contactId = intent.getStringExtra(
+                            ChatNotificationManager.EXTRA_CONTACT_ID
+                        )
+                        if (conversationId != null && contactId != null) {
+                            navController.navigate(Routes.chat(conversationId, contactId))
+                        }
                     }
                 }
 

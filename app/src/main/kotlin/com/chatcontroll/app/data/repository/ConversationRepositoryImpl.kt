@@ -47,6 +47,10 @@ class ConversationRepositoryImpl @Inject constructor(
         return id
     }
 
+    override suspend fun clearUnread(conversationId: String) {
+        conversationDao.clearUnread(conversationId)
+    }
+
     override suspend fun deleteConversation(conversationId: String) {
         messageDao.deleteAllForConversation(conversationId)
         conversationDao.delete(conversationId)

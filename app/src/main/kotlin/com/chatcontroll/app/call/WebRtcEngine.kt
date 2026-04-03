@@ -34,10 +34,7 @@ class WebRtcEngine(context: Context) {
     var onConnectionStateChange: ((PeerConnection.IceConnectionState) -> Unit)? = null
 
     init {
-        PeerConnectionFactory.initialize(
-            PeerConnectionFactory.InitializationOptions.builder(context)
-                .createInitializationOptions()
-        )
+        initOnce(context)
         factory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
@@ -165,6 +162,22 @@ class WebRtcEngine(context: Context) {
 
     companion object {
         private const val TAG = "WebRtcEngine"
+        @Volatile private var initialized = false
+
+        private fun initOnce(context: Context) {
+            if (!initialized) {
+                synchronized(this) {
+                    if (!initialized) {
+                        PeerConnectionFactory.initialize(
+                            PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+                                .createInitializationOptions()
+                        )
+                        initialized = true
+                    }
+                }
+            }
+        }
+
         private val DEFAULT_ICE_SERVERS = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
         )

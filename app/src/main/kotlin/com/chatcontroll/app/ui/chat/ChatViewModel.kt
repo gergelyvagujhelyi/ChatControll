@@ -51,6 +51,10 @@ class ChatViewModel @Inject constructor(
     val sendError: StateFlow<String?> = _sendError.asStateFlow()
 
     init {
+        // Clear unread badge when conversation is opened
+        viewModelScope.launch {
+            conversationRepository.clearUnread(conversationId)
+        }
         // Poll for new messages while the chat screen is open
         viewModelScope.launch {
             while (true) {
@@ -83,7 +87,11 @@ class ChatViewModel @Inject constructor(
 
     fun retrySend(messageId: String) {
         viewModelScope.launch {
-            messageRepository.retryFailed(messageId)
+            try {
+                messageRepository.retryFailed(messageId)
+            } catch (e: Exception) {
+                _sendError.value = e.message ?: "Retry failed"
+            }
         }
     }
 
