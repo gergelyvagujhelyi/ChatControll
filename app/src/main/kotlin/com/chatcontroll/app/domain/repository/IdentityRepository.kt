@@ -14,4 +14,5 @@ interface IdentityRepository {
     suspend fun getContact(userId: String): Contact?
     suspend fun publishKeyBundle()
     suspend fun fetchKeyBundle(userId: String): Contact?
+    fun isPqcSession(peerId: String): Boolean
 }

@@ -148,9 +148,9 @@ class MessageRepositoryImpl @Inject constructor(
                 header.kemCiphertext?.let { Base64.decode(it, Base64.NO_WRAP) }
             } catch (_: Exception) { null }
 
-            // Auto-establish session if we don't have one for this sender
+            // Auto-establish session, or re-establish if sender upgraded to PQC
             var sessionKeys = keyManager.getCachedSessionKeys(dto.senderId)
-            if (sessionKeys == null) {
+            if (sessionKeys == null || (kemCiphertext != null && !sessionKeys.pqcEstablished)) {
                 sessionKeys = tryEstablishSession(dto.senderId, kemCiphertext)
             }
             if (sessionKeys == null) continue
@@ -219,12 +219,15 @@ class MessageRepositoryImpl @Inject constructor(
                 Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
             } else ByteArray(0)
 
+            // Only pass PQC key when we have inbound KEM ciphertext to decapsulate.
+            // Without it, the initiator would encapsulate and derive a hybrid root
+            // key that doesn't match the sender's classical-only session.
             val sessionKeys = cryptoEngine.establishSession(
                 localIdentity = localKeyPair,
                 remotePublicBundle = PublicKeyBundle(
                     publicSigningKey = pubSignKey,
                     publicIdentityKey = pubIdKey,
-                    pqcEncapsulationKey = pqcKey,
+                    pqcEncapsulationKey = if (inboundKemCiphertext != null) pqcKey else ByteArray(0),
                 ),
                 inboundKemCiphertext = inboundKemCiphertext,
             )

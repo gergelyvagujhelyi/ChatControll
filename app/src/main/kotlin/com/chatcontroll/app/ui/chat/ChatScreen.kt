@@ -53,6 +53,7 @@ fun ChatScreen(
     val conversation by viewModel.conversation.collectAsState()
     val composerText by viewModel.composerText.collectAsState()
     val sendError by viewModel.sendError.collectAsState()
+    val encryptionInfo = viewModel.encryptionInfo
 
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
@@ -99,7 +100,7 @@ fun ChatScreen(
                                     tint = MaterialTheme.colorScheme.primary,
                                 )
                                 Text(
-                                    text = "End-to-end encrypted",
+                                    text = encryptionInfo,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                 )

@@ -178,4 +178,6 @@ class IdentityRepositoryImpl @Inject constructor(
             publicSigningKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP),
         )
     }
+
+    override fun isPqcSession(peerId: String): Boolean = keyManager.isPeerPqcEstablished(peerId)
 }

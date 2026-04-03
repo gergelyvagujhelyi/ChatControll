@@ -77,6 +77,7 @@ class HybridCryptoEngine @Inject constructor(
             sendKey = combinedSecret.copyOfRange(0, 32),
             receiveKey = combinedSecret.copyOfRange(32, 64),
             sessionId = sessionId,
+            pqcEstablished = pqSecret.isNotEmpty(),
         )
     }
 

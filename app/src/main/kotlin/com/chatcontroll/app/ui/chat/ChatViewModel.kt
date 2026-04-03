@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.chatcontroll.app.domain.model.Conversation
 import com.chatcontroll.app.domain.model.Message
 import com.chatcontroll.app.domain.repository.ConversationRepository
+import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.usecase.SendMessageUseCase
 import com.chatcontroll.app.domain.repository.MessageRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -22,6 +23,7 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val messageRepository: MessageRepository,
     private val conversationRepository: ConversationRepository,
+    private val identityRepository: IdentityRepository,
     private val sendMessage: SendMessageUseCase,
 ) : ViewModel() {
 
@@ -35,6 +37,12 @@ class ChatViewModel @Inject constructor(
     val conversation: StateFlow<Conversation?> =
         conversationRepository.getConversation(conversationId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val encryptionInfo: String = if (identityRepository.isPqcSession(contactId)) {
+        "ML-KEM-768 + X25519 + AES-256-GCM"
+    } else {
+        "X25519 + AES-256-GCM"
+    }
 
     private val _composerText = MutableStateFlow("")
     val composerText: StateFlow<String> = _composerText.asStateFlow()

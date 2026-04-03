@@ -92,6 +92,14 @@ class KeyManager @Inject constructor(
 
     fun cacheSessionKeys(peerId: String, sessionKeys: SessionKeys) {
         sessionCache[peerId] = sessionKeys
+        if (sessionKeys.pqcEstablished) {
+            encryptedPrefs.edit().putBoolean(PQC_PREFIX + peerId, true).apply()
+        }
+    }
+
+    fun isPeerPqcEstablished(peerId: String): Boolean {
+        return sessionCache[peerId]?.pqcEstablished
+            ?: encryptedPrefs.getBoolean(PQC_PREFIX + peerId, false)
     }
 
     fun getCachedSessionKeys(peerId: String): SessionKeys? {
@@ -146,6 +154,7 @@ class KeyManager @Inject constructor(
         private const val KEY_SHARE_CODE = "share_code"
         private const val KEY_PQC_ENCAPSULATION = "pqc_ek"
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
+        private const val PQC_PREFIX = "pqc_session_"
     }
 }
 

@@ -136,6 +136,7 @@ class RatchetSessionManager @Inject constructor(
             sendKey = sharedSecret.copyOfRange(0, 16) + sharedSecret.copyOfRange(0, 16),
             receiveKey = sharedSecret.copyOfRange(16, 32) + sharedSecret.copyOfRange(0, 16),
             sessionId = sessionId,
+            pqcEstablished = pqcSecret.isNotEmpty(),
         )
     }
 

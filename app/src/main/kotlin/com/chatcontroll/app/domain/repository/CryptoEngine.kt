@@ -72,6 +72,7 @@ data class SessionKeys(
     val sendKey: ByteArray,
     val receiveKey: ByteArray,
     val sessionId: String,
+    val pqcEstablished: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
