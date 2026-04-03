@@ -8,6 +8,7 @@ from app.models.schemas import (
     IceServer,
     IceServersResponse,
 )
+from app.config import TURN_USERNAME, TURN_PASSWORD
 from app.services.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/v1/calls", tags=["calling"])
@@ -40,8 +41,8 @@ async def get_ice_servers(request: Request) -> IceServersResponse:
         servers.append(
             IceServer(
                 urls=f"turn:{relay_ip}:3478?transport=udp",
-                username="test",
-                credential="test",
+                username=TURN_USERNAME,
+                credential=TURN_PASSWORD,
             )
         )
 

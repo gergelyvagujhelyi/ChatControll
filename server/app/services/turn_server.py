@@ -54,10 +54,9 @@ ATTR_XOR_MAPPED_ADDRESS = 0x0020
 ATTR_SOFTWARE = 0x8022
 ATTR_FINGERPRINT = 0x8028
 
-# Config
+# Config (loaded from environment via app.config)
+from app.config import TURN_USERNAME, TURN_PASSWORD
 REALM = "chatcontroll"
-TURN_USERNAME = "test"
-TURN_PASSWORD = "test"
 TURN_LIFETIME = 600
 RELAY_PORT_MIN = 49152
 RELAY_PORT_MAX = 49252

@@ -22,3 +22,5 @@ TURN_ENABLED: bool = os.getenv("TURN_ENABLED", "true").lower() == "true"
 # For Android emulators, use 10.0.2.2 (host alias inside emulator).
 # For real devices, set to your server's public IP.
 TURN_RELAY_IP: str = os.getenv("TURN_RELAY_IP", "10.0.2.2")
+TURN_USERNAME: str = os.getenv("TURN_USERNAME", "chatcontroll")
+TURN_PASSWORD: str = os.getenv("TURN_PASSWORD", "chatcontroll")
