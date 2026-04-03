@@ -4,6 +4,7 @@ Sends wake-up signals only — never includes message content in the push payloa
 The client fetches encrypted envelopes directly from this server after wake-up.
 """
 
+import asyncio
 import logging
 
 from app.config import FIREBASE_CREDENTIALS
@@ -66,7 +67,7 @@ async def send_push_notification(
                 ttl=60,  # seconds — stale pushes are useless
             ),
         )
-        messaging.send(message)
+        await asyncio.to_thread(messaging.send, message)
         return True
     except Exception:
         logger.exception("Failed to send push notification")

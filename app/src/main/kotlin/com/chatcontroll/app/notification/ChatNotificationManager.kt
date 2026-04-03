@@ -74,7 +74,7 @@ class ChatNotificationManager @Inject constructor(
 
         val visibility = when (settings.lockScreenPreview) {
             LockScreenPreviewMode.SHOW_ALL -> NotificationCompat.VISIBILITY_PUBLIC
-            LockScreenPreviewMode.SENDER_ONLY -> NotificationCompat.VISIBILITY_PRIVATE
+            LockScreenPreviewMode.SENDER_ONLY -> NotificationCompat.VISIBILITY_PUBLIC
             LockScreenPreviewMode.HIDE_BODY -> NotificationCompat.VISIBILITY_PRIVATE
             LockScreenPreviewMode.HIDE_ALL -> NotificationCompat.VISIBILITY_SECRET
         }

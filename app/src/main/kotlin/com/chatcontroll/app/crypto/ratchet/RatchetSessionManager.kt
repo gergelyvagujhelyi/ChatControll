@@ -10,6 +10,8 @@ import com.chatcontroll.app.domain.repository.EncryptedEnvelope
 import com.chatcontroll.app.domain.repository.KeyPair
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
@@ -38,6 +40,7 @@ class RatchetSessionManager @Inject constructor(
 
     private val ratchet = DoubleRatchet(classicalKeyAgreement)
     private val sessions = mutableMapOf<String, RatchetState>()
+    private val sessionsMutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
 
     override suspend fun generateIdentity(): KeyPair {
@@ -130,48 +133,52 @@ class RatchetSessionManager @Inject constructor(
             pqcEstablished = pqcSecret.isNotEmpty(),
         )
 
-        sessions[sessionId] = state
+        sessionsMutex.withLock { sessions[sessionId] = state }
 
         return SessionKeys(
-            sendKey = sharedSecret.copyOfRange(0, 16) + sharedSecret.copyOfRange(0, 16),
-            receiveKey = sharedSecret.copyOfRange(16, 32) + sharedSecret.copyOfRange(0, 16),
+            sendKey = if (isInitiator) chainA else chainB,
+            receiveKey = if (isInitiator) chainB else chainA,
             sessionId = sessionId,
             pqcEstablished = pqcSecret.isNotEmpty(),
         )
     }
 
     override suspend fun encrypt(sessionKeys: SessionKeys, plaintext: ByteArray): EncryptedEnvelope {
-        val state = sessions[sessionKeys.sessionId]
-            ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
+        return sessionsMutex.withLock {
+            val state = sessions[sessionKeys.sessionId]
+                ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
-        val (header, ciphertext) = ratchet.encrypt(state, plaintext)
+            val (header, ciphertext) = ratchet.encrypt(state, plaintext)
 
-        // Attach PQC KEM ciphertext to the first outbound message header
-        val finalHeader = if (state.pendingKemCiphertext != null) {
-            val ct = state.pendingKemCiphertext!!
-            state.pendingKemCiphertext = null
-            header.copy(kemCiphertext = Base64.encodeToString(ct, Base64.NO_WRAP))
-        } else {
-            header
+            // Attach PQC KEM ciphertext to the first outbound message header
+            val finalHeader = if (state.pendingKemCiphertext != null) {
+                val ct = state.pendingKemCiphertext!!
+                state.pendingKemCiphertext = null
+                header.copy(kemCiphertext = Base64.encodeToString(ct, Base64.NO_WRAP))
+            } else {
+                header
+            }
+
+            val headerJson = json.encodeToString(finalHeader)
+
+            EncryptedEnvelope(
+                ciphertext = ciphertext,
+                nonce = headerJson.toByteArray(Charsets.UTF_8),
+                ephemeralPublicKey = Base64.decode(finalHeader.publicKey, Base64.NO_WRAP),
+            )
         }
-
-        val headerJson = json.encodeToString(finalHeader)
-
-        return EncryptedEnvelope(
-            ciphertext = ciphertext,
-            nonce = headerJson.toByteArray(Charsets.UTF_8),
-            ephemeralPublicKey = Base64.decode(finalHeader.publicKey, Base64.NO_WRAP),
-        )
     }
 
     override suspend fun decrypt(sessionKeys: SessionKeys, envelope: EncryptedEnvelope): ByteArray {
-        val state = sessions[sessionKeys.sessionId]
-            ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
+        return sessionsMutex.withLock {
+            val state = sessions[sessionKeys.sessionId]
+                ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
-        val headerJson = String(envelope.nonce, Charsets.UTF_8)
-        val header = json.decodeFromString<RatchetHeader>(headerJson)
+            val headerJson = String(envelope.nonce, Charsets.UTF_8)
+            val header = json.decodeFromString<RatchetHeader>(headerJson)
 
-        return ratchet.decrypt(state, header, envelope.ciphertext)
+            ratchet.decrypt(state, header, envelope.ciphertext)
+        }
     }
 
     override suspend fun sign(data: ByteArray): ByteArray {

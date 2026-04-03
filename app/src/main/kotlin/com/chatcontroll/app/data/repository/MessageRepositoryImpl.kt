@@ -111,8 +111,22 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun retryFailed(messageId: String) {
+        val entity = messageDao.getById(messageId) ?: return
         messageDao.updateState(messageId, MessageState.SENDING.name)
-        // Re-send logic would go through WorkManager in production
+
+        try {
+            val response = apiService.sendMessage(
+                SendMessageRequest(
+                    recipientId = entity.recipientId,
+                    encryptedBody = Base64.encodeToString(entity.encryptedBody, Base64.NO_WRAP),
+                    nonce = Base64.encodeToString(entity.nonce, Base64.NO_WRAP),
+                )
+            )
+            messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
+        } catch (e: Exception) {
+            messageDao.updateState(messageId, MessageState.FAILED.name)
+            throw e
+        }
     }
 
     override suspend fun deleteMessage(messageId: String) {

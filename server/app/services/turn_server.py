@@ -198,6 +198,22 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
         logger.info("TURN server listening on port %d", TURN_PORT)
+        self._cleanup_task = asyncio.ensure_future(self._expire_allocations())
+
+    async def _expire_allocations(self) -> None:
+        """Periodically remove expired TURN allocations."""
+        while True:
+            await asyncio.sleep(30)
+            now = time.time()
+            expired = [addr for addr, alloc in self.allocations.items() if alloc.expires <= now]
+            for addr in expired:
+                alloc = self.allocations.pop(addr)
+                alloc.transport.close()
+                logger.info("TURN allocation expired for %s:%d (relay :%d)", addr[0], addr[1], alloc.relay_port)
+
+    def connection_lost(self, exc) -> None:
+        if hasattr(self, "_cleanup_task"):
+            self._cleanup_task.cancel()
 
     def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
         if len(data) < 4:
@@ -254,6 +270,15 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         if ATTR_USERNAME not in attrs:
             # Send 401 with REALM and NONCE
             err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 4, 1) + b"Unauthorized")
+            err += _build_attr(ATTR_REALM, REALM.encode())
+            err += _build_attr(ATTR_NONCE, self._nonce.encode())
+            msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
+            self.transport.sendto(msg, addr)
+            return
+
+        # Verify MESSAGE-INTEGRITY
+        if not self._verify_message_integrity(data, attrs):
+            err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 4, 1) + b"Bad credentials")
             err += _build_attr(ATTR_REALM, REALM.encode())
             err += _build_attr(ATTR_NONCE, self._nonce.encode())
             msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
@@ -361,6 +386,27 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         peer_ip, peer_port = _decode_xor_address(attrs[ATTR_XOR_PEER_ADDRESS], b"\x00" * 12)
         logger.info("Send indication: %s:%d → %s:%d (%d bytes)", addr[0], addr[1], peer_ip, peer_port, len(attrs[ATTR_DATA]))
         alloc.transport.sendto(attrs[ATTR_DATA], (peer_ip, peer_port))
+
+    def _verify_message_integrity(self, data: bytes, attrs: Dict[int, bytes]) -> bool:
+        """Verify the MESSAGE-INTEGRITY attribute using the long-term HMAC key."""
+        if ATTR_MESSAGE_INTEGRITY not in attrs:
+            return False
+        received_mac = attrs[ATTR_MESSAGE_INTEGRITY]
+        # Find where MESSAGE-INTEGRITY attribute starts in the raw data
+        offset = HEADER_SIZE
+        while offset + 4 <= len(data):
+            attr_type, attr_len = struct.unpack_from("!HH", data, offset)
+            if attr_type == ATTR_MESSAGE_INTEGRITY:
+                break
+            offset += 4 + attr_len + (4 - attr_len % 4) % 4
+        else:
+            return False
+        # Rewrite the message length in the header to cover up to MESSAGE-INTEGRITY
+        mi_len = offset - HEADER_SIZE + 4 + 20  # attr header (4) + HMAC (20)
+        modified = bytearray(data[:offset])
+        struct.pack_into("!H", modified, 2, mi_len)
+        expected_mac = hmac.new(HMAC_KEY, bytes(modified), hashlib.sha1).digest()
+        return hmac.compare_digest(expected_mac, received_mac)
 
     def _handle_channel_data(self, data: bytes, addr: Tuple[str, int]) -> None:
         alloc = self.allocations.get(addr)

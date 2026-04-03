@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import MAX_PENDING_MESSAGES_PER_USER
@@ -50,10 +50,10 @@ async def send_message(
 
     # Check pending queue depth
     count_result = await db.execute(
-        select(PendingMessage)
+        select(func.count(PendingMessage.id))
         .where(PendingMessage.recipient_id == request.recipient_id)
     )
-    pending_count = len(count_result.scalars().all())
+    pending_count = count_result.scalar_one()
     if pending_count >= MAX_PENDING_MESSAGES_PER_USER:
         raise HTTPException(
             status_code=507,

@@ -29,9 +29,9 @@ class MockPqcProvider @Inject constructor() : PqcProvider {
     private val secureRandom = SecureRandom()
 
     override fun generateKemKeyPair(): KemKeyPair {
-        val encapsulationKey = ByteArray(MOCK_KEY_SIZE).also { secureRandom.nextBytes(it) }
-        val decapsulationKey = ByteArray(MOCK_KEY_SIZE).also { secureRandom.nextBytes(it) }
-        return KemKeyPair(encapsulationKey, decapsulationKey)
+        // Use the same key for both roles so HMAC(key, nonce) matches on both sides.
+        val sharedKey = ByteArray(MOCK_KEY_SIZE).also { secureRandom.nextBytes(it) }
+        return KemKeyPair(encapsulationKey = sharedKey, decapsulationKey = sharedKey.copyOf())
     }
 
     override fun encapsulate(encapsulationKey: ByteArray): KemEncapsulation {
@@ -44,6 +44,7 @@ class MockPqcProvider @Inject constructor() : PqcProvider {
     }
 
     override fun decapsulate(ciphertext: ByteArray, decapsulationKey: ByteArray): ByteArray {
+        // decapsulationKey == encapsulationKey in this mock, so HMAC output matches
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(decapsulationKey, "HmacSHA256"))
         mac.update(ciphertext)
