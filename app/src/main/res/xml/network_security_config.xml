@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Production: certificate pinning for the relay server -->
+    <!--
+    <domain-config>
+        <domain includeSubdomains="true">api.chatcontroll.app</domain>
+        <pin-set expiration="2027-01-01">
+            <pin digest="SHA-256">PLACEHOLDER_PIN_HASH=</pin>
+        </pin-set>
+    </domain-config>
+    -->
+
+    <!-- Debug: allow cleartext for local development -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">chatcontroll.local</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

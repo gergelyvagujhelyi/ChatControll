@@ -1,0 +1,82 @@
+package com.chatcontroll.app
+
+import android.os.Bundle
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
+import androidx.navigation.compose.rememberNavController
+import com.chatcontroll.app.domain.model.PrivacySettings
+import com.chatcontroll.app.domain.repository.IdentityRepository
+import com.chatcontroll.app.domain.repository.SettingsRepository
+import com.chatcontroll.app.notification.ChatNotificationManager
+import com.chatcontroll.app.ui.navigation.ChatNavGraph
+import com.chatcontroll.app.ui.navigation.Routes
+import com.chatcontroll.app.ui.theme.ChatControllTheme
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+
+    @Inject lateinit var identityRepository: IdentityRepository
+    @Inject lateinit var settingsRepository: SettingsRepository
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        // Apply screen security by default
+        lifecycleScope.launch {
+            val settings = settingsRepository.getPrivacySettings().firstOrNull() ?: PrivacySettings()
+            if (settings.screenSecurity) {
+                window.setFlags(
+                    WindowManager.LayoutParams.FLAG_SECURE,
+                    WindowManager.LayoutParams.FLAG_SECURE,
+                )
+            }
+        }
+
+        setContent {
+            ChatControllTheme {
+                var startDestination by remember { mutableStateOf<String?>(null) }
+
+                LaunchedEffect(Unit) {
+                    startDestination = if (identityRepository.hasIdentity()) {
+                        Routes.CONVERSATIONS
+                    } else {
+                        Routes.ONBOARDING
+                    }
+                }
+
+                val navController = rememberNavController()
+
+                // Handle deep-link from notification
+                LaunchedEffect(Unit) {
+                    val conversationId = intent.getStringExtra(
+                        ChatNotificationManager.EXTRA_CONVERSATION_ID
+                    )
+                    if (conversationId != null && startDestination == Routes.CONVERSATIONS) {
+                        // Navigate to the specific conversation
+                        navController.navigate(Routes.chat(conversationId, ""))
+                    }
+                }
+
+                startDestination?.let { dest ->
+                    ChatNavGraph(
+                        navController = navController,
+                        startDestination = dest,
+                    )
+                }
+            }
+        }
+    }
+}

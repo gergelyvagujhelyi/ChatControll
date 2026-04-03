@@ -1,0 +1,65 @@
+package com.chatcontroll.app
+
+import android.app.Application
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.chatcontroll.app.data.remote.WebSocketClient
+import com.chatcontroll.app.worker.SyncWorker
+import dagger.hilt.android.HiltAndroidApp
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import java.security.Security
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+
+@HiltAndroidApp
+class ChatControllApp : Application(), Configuration.Provider {
+
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var webSocketClient: WebSocketClient
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
+
+    override fun onCreate() {
+        super.onCreate()
+
+        // Android ships a stripped-down BC provider that lacks Ed25519/X25519/Kyber.
+        // Replace it with the full Bouncy Castle 1.79 provider.
+        Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
+        Security.insertProviderAt(BouncyCastleProvider(), 1)
+
+        // Initialize SQLCipher native library
+        System.loadLibrary("sqlcipher")
+
+        scheduleSyncWorker()
+
+        // Connect WebSocket for real-time delivery (no-op if using mock backend)
+        webSocketClient.connect()
+    }
+
+    private fun scheduleSyncWorker() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
+            15, TimeUnit.MINUTES,
+        )
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "message_sync",
+            ExistingPeriodicWorkPolicy.KEEP,
+            syncRequest,
+        )
+    }
+}

@@ -1,0 +1,20 @@
+"""Server configuration loaded from environment variables."""
+
+import os
+from typing import Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATABASE_URL: str = os.getenv(
+    "DATABASE_URL", "sqlite+aiosqlite:///./chatcontroll.db"
+)
+FIREBASE_CREDENTIALS: Optional[str] = os.getenv("FIREBASE_CREDENTIALS")
+HOST: str = os.getenv("HOST", "0.0.0.0")
+PORT: int = int(os.getenv("PORT", "8000"))
+DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+MAX_MESSAGES_PER_MINUTE: int = int(os.getenv("MAX_MESSAGES_PER_MINUTE", "60"))
+MAX_PENDING_MESSAGES_PER_USER: int = int(
+    os.getenv("MAX_PENDING_MESSAGES_PER_USER", "1000")
+)
