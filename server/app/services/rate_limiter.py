@@ -16,7 +16,7 @@ from app.models.db import RateLimit
 
 async def check_rate_limit(db: AsyncSession, user_id: str) -> bool:
     """Return True if the user is within rate limits, False if exceeded."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     window_start = now - timedelta(minutes=1)
 
     result = await db.execute(
