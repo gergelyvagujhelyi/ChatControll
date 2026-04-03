@@ -34,6 +34,8 @@ class MessageRepositoryImpl @Inject constructor(
     private val keyManager: KeyManager,
 ) : MessageRepository {
 
+    private val fetchLock = kotlinx.coroutines.sync.Mutex()
+
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
             entities.map { it.toDomain(keyManager.getUserId() ?: "") }
@@ -119,6 +121,15 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun fetchPendingFromServer() {
+        if (!fetchLock.tryLock()) return // skip if already fetching
+        try {
+            fetchPendingInternal()
+        } finally {
+            fetchLock.unlock()
+        }
+    }
+
+    private suspend fun fetchPendingInternal() {
         val pending = apiService.fetchPendingMessages()
         if (pending.isEmpty()) return
 

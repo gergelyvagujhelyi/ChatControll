@@ -47,20 +47,32 @@ class IdentityRepositoryImpl @Inject constructor(
     override suspend fun getOrCreateIdentity(): Identity {
         getIdentity()?.let { return it }
 
-        // Generate new cryptographic identity (classical)
-        val keyPair = cryptoEngine.generateIdentity()
-        keyManager.storeIdentityKeyPair(keyPair)
+        // Reuse keys from a previous failed attempt, or generate new ones
+        val keyPair = keyManager.loadIdentityKeyPair() ?: run {
+            val kp = cryptoEngine.generateIdentity()
+            keyManager.storeIdentityKeyPair(kp)
+            kp
+        }
 
-        // Generate ML-KEM-768 keypair (post-quantum)
-        val kemKeyPair = pqcProvider.generateKemKeyPair()
-        keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
+        // Reuse PQC keys from a previous failed attempt, or generate new ones
+        val pqcEk = keyManager.getPqcEncapsulationKey() ?: run {
+            try {
+                val kemKeyPair = pqcProvider.generateKemKeyPair()
+                keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
+                kemKeyPair.encapsulationKey
+            } catch (e: Exception) {
+                // PQC is optional — proceed without it if BC fails on this device
+                android.util.Log.w("Identity", "PQC key gen failed, proceeding without: ${e.message}")
+                ByteArray(0)
+            }
+        }
 
         // Register with relay server
         val response = apiService.bootstrapIdentity(
             BootstrapRequest(
                 publicSigningKey = Base64.encodeToString(keyPair.publicSigningKey, Base64.NO_WRAP),
                 publicIdentityKey = Base64.encodeToString(keyPair.publicIdentityKey, Base64.NO_WRAP),
-                pqcEncapsulationKey = Base64.encodeToString(kemKeyPair.encapsulationKey, Base64.NO_WRAP),
+                pqcEncapsulationKey = if (pqcEk.isNotEmpty()) Base64.encodeToString(pqcEk, Base64.NO_WRAP) else "",
             )
         )
 

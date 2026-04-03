@@ -48,6 +48,13 @@ class KtorApiService @Inject constructor(
 ) : ApiService {
 
     private val client = HttpClient(OkHttp) {
+        engine {
+            config {
+                connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                writeTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
