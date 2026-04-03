@@ -305,16 +305,39 @@ class CallManager @Inject constructor(
         }
     }
 
-    private fun encryptPayload(peerId: String, plaintext: String): String {
-        // Call signaling passes through the relay as base64.
-        // Audio is encrypted by DTLS-SRTP; SDP fingerprints are relayed via
-        // the authenticated WebSocket session.
-        return Base64.encodeToString(plaintext.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+    private suspend fun encryptPayload(peerId: String, plaintext: String): String {
+        val sessionKeys = keyManager.getCachedSessionKeys(peerId)
+        if (sessionKeys == null) {
+            Log.w(TAG, "No session keys for $peerId, falling back to base64")
+            return Base64.encodeToString(plaintext.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        }
+        val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
+        // Pack as: nonce_b64.ciphertext_b64
+        val nonceB64 = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP)
+        val ctB64 = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP)
+        return "$nonceB64.$ctB64"
     }
 
-    private fun decryptPayload(peerId: String, encrypted: String): String {
+    private suspend fun decryptPayload(peerId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
-        return String(Base64.decode(encrypted, Base64.NO_WRAP), Charsets.UTF_8)
+        if (!encrypted.contains('.')) {
+            // Legacy base64-only payload (no session keys on sender side)
+            return String(Base64.decode(encrypted, Base64.NO_WRAP), Charsets.UTF_8)
+        }
+        val sessionKeys = keyManager.getCachedSessionKeys(peerId)
+        if (sessionKeys == null) {
+            Log.w(TAG, "No session keys for $peerId, cannot decrypt signal")
+            // Try as plain base64 fallback
+            return try {
+                String(Base64.decode(encrypted.substringAfter('.'), Base64.NO_WRAP), Charsets.UTF_8)
+            } catch (_: Exception) { "" }
+        }
+        val parts = encrypted.split('.', limit = 2)
+        val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
+        val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
+        val envelope = com.chatcontroll.app.domain.repository.EncryptedEnvelope(ciphertext, nonce)
+        val plainBytes = cryptoEngine.decrypt(sessionKeys, envelope)
+        return String(plainBytes, Charsets.UTF_8)
     }
 
     private fun requestAudioFocus() {
