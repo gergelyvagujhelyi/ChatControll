@@ -72,6 +72,7 @@ async def send_message(
         nonce=request.nonce,
         ephemeral_public_key=request.ephemeral_public_key,
         created_at=now,
+        timestamp_ms=timestamp_ms,
     )
     db.add(pending)
     await db.commit()
@@ -122,7 +123,7 @@ async def fetch_pending_messages(
             encrypted_body=msg.encrypted_body,
             nonce=msg.nonce,
             ephemeral_public_key=msg.ephemeral_public_key,
-            timestamp=int(msg.created_at.timestamp() * 1000) if msg.created_at else 0,
+            timestamp=msg.timestamp_ms or 0,
         )
         for msg in messages
     ]

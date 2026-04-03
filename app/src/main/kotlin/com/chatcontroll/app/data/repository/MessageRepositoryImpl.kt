@@ -49,9 +49,12 @@ class MessageRepositoryImpl @Inject constructor(
         val now = System.currentTimeMillis()
         val senderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
 
-        // Encrypt the message
-        val sessionKeys = keyManager.getCachedSessionKeys(recipientId)
-            ?: throw IllegalStateException("No session established with $recipientId")
+        // Encrypt the message — re-establish session if not cached
+        var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
+        if (sessionKeys == null) {
+            sessionKeys = tryEstablishSession(recipientId)
+                ?: throw IllegalStateException("No session established with $recipientId")
+        }
 
         val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
@@ -80,9 +83,9 @@ class MessageRepositoryImpl @Inject constructor(
                     nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
                 )
             )
-            messageDao.updateState(messageId, MessageState.SENT.name)
+            messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
 
-            updateConversationPreview(conversationId, recipientId, plaintext, now)
+            updateConversationPreview(conversationId, recipientId, plaintext, response.timestamp)
 
             return entity.toDomain(senderId).copy(
                 state = MessageState.SENT,
@@ -138,7 +141,8 @@ class MessageRepositoryImpl @Inject constructor(
 
             val plaintext = try {
                 cryptoEngine.decrypt(sessionKeys, envelope)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
                 continue // Skip messages we can't decrypt
             }
 

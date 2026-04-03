@@ -52,6 +52,7 @@ class PendingMessage(Base):
     encrypted_body = Column(Text, nullable=False)
     nonce = Column(Text, nullable=False)
     ephemeral_public_key = Column(Text, nullable=False, default="")
+    timestamp_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
 

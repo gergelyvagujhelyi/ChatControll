@@ -22,6 +22,9 @@ interface MessageDao {
     @Query("UPDATE messages SET state = :state WHERE id = :messageId")
     suspend fun updateState(messageId: String, state: String)
 
+    @Query("UPDATE messages SET state = :state, timestamp = :timestamp WHERE id = :messageId")
+    suspend fun updateStateAndTimestamp(messageId: String, state: String, timestamp: Long)
+
     @Query("SELECT * FROM messages WHERE state = 'FAILED'")
     suspend fun getFailedMessages(): List<MessageEntity>
 

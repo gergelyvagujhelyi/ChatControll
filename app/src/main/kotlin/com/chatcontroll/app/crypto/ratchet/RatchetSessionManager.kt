@@ -76,27 +76,36 @@ class RatchetSessionManager @Inject constructor(
             localIdentity.publicIdentityKey + remotePublicBundle.publicIdentityKey
         )
 
-        // Determine initiator role by comparing public keys lexicographically.
-        // The peer with the "smaller" public key is Alice (initiator).
+        // Derive two directional chain keys so both sides can send immediately.
+        // The "smaller" public key's owner uses chain A to send and chain B to receive;
+        // the "larger" key's owner uses chain B to send and chain A to receive.
         val isInitiator = localIdentity.publicIdentityKey.toHex() <
             remotePublicBundle.publicIdentityKey.toHex()
 
-        val state = if (isInitiator) {
-            // Alice: needs Bob's ratchet public key (use his identity key as initial ratchet key)
-            ratchet.initAlice(sharedSecret, remotePublicBundle.publicIdentityKey)
-        } else {
-            // Bob: uses his own identity keypair as initial ratchet keypair
-            val bobDhKeyPair = DhKeyPair(
-                publicKey = localIdentity.publicIdentityKey,
-                privateKey = localIdentity.privateIdentityKey,
-            )
-            ratchet.initBob(sharedSecret, bobDhKeyPair)
-        }
+        val chainMaterial = hkdfSha256(
+            ikm = sharedSecret,
+            salt = "ChatControll-v1-chains".toByteArray(),
+            info = "bidirectional-chains".toByteArray(),
+            length = 64,
+        )
+        val chainA = chainMaterial.copyOfRange(0, 32)
+        val chainB = chainMaterial.copyOfRange(32, 64)
+
+        val dhKeyPair = DhKeyPair(
+            publicKey = localIdentity.publicIdentityKey,
+            privateKey = localIdentity.privateIdentityKey,
+        )
+
+        val state = RatchetState(
+            dhKeyPair = dhKeyPair,
+            remoteDhPublicKey = remotePublicBundle.publicIdentityKey,
+            rootKey = sharedSecret,
+            sendingChainKey = ChainKey(if (isInitiator) chainA else chainB, 0),
+            receivingChainKey = ChainKey(if (isInitiator) chainB else chainA, 0),
+        )
 
         sessions[sessionId] = state
 
-        // Return SessionKeys for compatibility with the existing interface.
-        // The actual per-message keys come from the ratchet, not these.
         return SessionKeys(
             sendKey = sharedSecret.copyOfRange(0, 16) + sharedSecret.copyOfRange(0, 16),
             receiveKey = sharedSecret.copyOfRange(16, 32) + sharedSecret.copyOfRange(0, 16),
