@@ -6,6 +6,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.chatcontroll.app.ui.call.CallScreen
 import com.chatcontroll.app.ui.chat.ChatScreen
 import com.chatcontroll.app.ui.contacts.AddContactScreen
 import com.chatcontroll.app.ui.conversations.ConversationsScreen
@@ -18,9 +19,12 @@ object Routes {
     const val CHAT = "chat/{conversationId}/{contactId}"
     const val ADD_CONTACT = "add_contact"
     const val SETTINGS = "settings"
+    const val CALL = "call/{contactId}/{displayName}"
 
     fun chat(conversationId: String, contactId: String) =
         "chat/$conversationId/$contactId"
+
+    fun call(contactId: String, displayName: String) = "call/$contactId/${java.net.URLEncoder.encode(displayName, "UTF-8")}"
 }
 
 @Composable
@@ -65,6 +69,21 @@ fun ChatNavGraph(
         ) {
             ChatScreen(
                 onBack = { navController.popBackStack() },
+                onCallClick = { contactId, displayName ->
+                    navController.navigate(Routes.call(contactId, displayName))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.CALL,
+            arguments = listOf(
+                navArgument("contactId") { type = NavType.StringType },
+                navArgument("displayName") { type = NavType.StringType },
+            ),
+        ) {
+            CallScreen(
+                onCallEnded = { navController.popBackStack() },
             )
         }
 

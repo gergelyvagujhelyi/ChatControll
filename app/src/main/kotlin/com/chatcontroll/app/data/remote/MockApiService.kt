@@ -108,6 +108,14 @@ class MockApiService @Inject constructor() : ApiService {
         pushTokens.remove(userId)
     }
 
+    override suspend fun sendCallSignal(request: com.chatcontroll.app.data.remote.dto.CallSignalRequest): com.chatcontroll.app.data.remote.dto.CallSignalResponse {
+        return com.chatcontroll.app.data.remote.dto.CallSignalResponse(delivered = false)
+    }
+
+    override suspend fun getIceServers(): com.chatcontroll.app.data.remote.dto.IceServersResponse {
+        return com.chatcontroll.app.data.remote.dto.IceServersResponse(iceServers = emptyList())
+    }
+
     private fun deriveShareCode(publicIdentityKeyBase64: String): String {
         val keyBytes = Base64.decode(publicIdentityKeyBase64, Base64.NO_WRAP)
         val hash = MessageDigest.getInstance("SHA-256").digest(keyBytes)

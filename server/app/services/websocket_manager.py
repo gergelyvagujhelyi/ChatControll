@@ -75,6 +75,41 @@ class WebSocketManager:
 
         return notified
 
+    async def relay_call_signal(
+        self,
+        sender_id: str,
+        recipient_id: str,
+        signal_type: str,
+        call_id: str,
+        encrypted_payload: str,
+    ) -> bool:
+        """Relay an opaque encrypted call signal to the recipient.
+
+        Returns True if at least one WebSocket received the signal.
+        """
+        async with self._lock:
+            sockets = list(self._connections.get(recipient_id, set()))
+
+        if not sockets:
+            return False
+
+        payload = json.dumps({
+            "type": signal_type,
+            "sender_id": sender_id,
+            "call_id": call_id,
+            "encrypted_payload": encrypted_payload,
+        })
+
+        delivered = False
+        for ws in sockets:
+            try:
+                await ws.send_text(payload)
+                delivered = True
+            except Exception:
+                pass
+
+        return delivered
+
 
 # Singleton instance
 ws_manager = WebSocketManager()

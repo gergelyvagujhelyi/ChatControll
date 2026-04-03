@@ -72,3 +72,36 @@ data class ApiError(
     val code: String,
     val message: String,
 )
+
+@Serializable
+data class CallSignalRequest(
+    val recipientId: String,
+    val signalType: String,
+    val callId: String,
+    val encryptedPayload: String,
+)
+
+@Serializable
+data class CallSignalResponse(
+    val delivered: Boolean,
+)
+
+@Serializable
+data class CallSignalDto(
+    val senderId: String,
+    val signalType: String,
+    val callId: String,
+    val encryptedPayload: String,
+)
+
+@Serializable
+data class IceServerDto(
+    val urls: String,
+    val username: String? = null,
+    val credential: String? = null,
+)
+
+@Serializable
+data class IceServersResponse(
+    val iceServers: List<IceServerDto>,
+)

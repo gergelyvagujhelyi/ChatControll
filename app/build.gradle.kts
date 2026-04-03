@@ -138,6 +138,9 @@ dependencies {
     // Bouncy Castle (ML-KEM / post-quantum crypto — PQC merged into bcprov since 1.78)
     implementation(libs.bouncycastle.provider)
 
+    // WebRTC
+    implementation(libs.webrtc)
+
     // Ktor WebSocket
     implementation(libs.ktor.client.websockets)
 

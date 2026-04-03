@@ -28,7 +28,7 @@ class ChatViewModel @Inject constructor(
 ) : ViewModel() {
 
     val conversationId: String = savedStateHandle["conversationId"] ?: ""
-    private val contactId: String = savedStateHandle["contactId"] ?: ""
+    val contactId: String = savedStateHandle["contactId"] ?: ""
 
     val messages: StateFlow<List<Message>> =
         messageRepository.getMessages(conversationId)

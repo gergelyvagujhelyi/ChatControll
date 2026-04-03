@@ -6,12 +6,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
+import com.chatcontroll.app.call.CallManager
+import com.chatcontroll.app.domain.model.CallDirection
+import com.chatcontroll.app.domain.model.CallStatus
 import com.chatcontroll.app.domain.model.PrivacySettings
 import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.repository.SettingsRepository
@@ -29,6 +33,7 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var identityRepository: IdentityRepository
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var callManager: CallManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +72,18 @@ class MainActivity : ComponentActivity() {
                     if (conversationId != null && startDestination == Routes.CONVERSATIONS) {
                         // Navigate to the specific conversation
                         navController.navigate(Routes.chat(conversationId, ""))
+                    }
+                }
+
+                // Navigate to CallScreen when an incoming call arrives
+                val incomingCall by callManager.callState.collectAsState()
+                LaunchedEffect(incomingCall) {
+                    val call = incomingCall
+                    if (call != null &&
+                        call.direction == CallDirection.INCOMING &&
+                        call.status == CallStatus.RINGING
+                    ) {
+                        navController.navigate(Routes.call(call.peerId, call.peerDisplayName))
                     }
                 }
 

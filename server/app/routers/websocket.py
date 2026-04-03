@@ -57,8 +57,30 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             raw = await websocket.receive_text()
             msg = json.loads(raw)
 
-            if msg.get("type") == "ping":
+            msg_type = msg.get("type")
+
+            if msg_type == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
+
+            elif msg_type in (
+                "call_offer",
+                "call_answer",
+                "call_ice_candidate",
+                "call_hangup",
+                "call_busy",
+                "call_reject",
+            ):
+                recipient_id = msg.get("recipient_id", "")
+                call_id = msg.get("call_id", "")
+                encrypted_payload = msg.get("encrypted_payload", "")
+                if recipient_id and call_id:
+                    await ws_manager.relay_call_signal(
+                        sender_id=user_id,
+                        recipient_id=recipient_id,
+                        signal_type=msg_type,
+                        call_id=call_id,
+                        encrypted_payload=encrypted_payload,
+                    )
 
     except WebSocketDisconnect:
         pass

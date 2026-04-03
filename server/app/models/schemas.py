@@ -69,3 +69,24 @@ class ErrorResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
+
+
+class CallSignalRequest(BaseModel):
+    recipient_id: str
+    signal_type: str
+    call_id: str
+    encrypted_payload: str
+
+
+class CallSignalResponse(BaseModel):
+    delivered: bool
+
+
+class IceServer(BaseModel):
+    urls: str
+    username: Optional[str] = None
+    credential: Optional[str] = None
+
+
+class IceServersResponse(BaseModel):
+    ice_servers: List[IceServer]

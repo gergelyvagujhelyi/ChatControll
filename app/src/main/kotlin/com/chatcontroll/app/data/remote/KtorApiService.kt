@@ -5,6 +5,9 @@ import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.remote.dto.AckRequest
 import com.chatcontroll.app.data.remote.dto.BootstrapRequest
 import com.chatcontroll.app.data.remote.dto.BootstrapResponse
+import com.chatcontroll.app.data.remote.dto.CallSignalRequest
+import com.chatcontroll.app.data.remote.dto.CallSignalResponse
+import com.chatcontroll.app.data.remote.dto.IceServersResponse
 import com.chatcontroll.app.data.remote.dto.KeyBundleDto
 import com.chatcontroll.app.data.remote.dto.PendingMessageDto
 import com.chatcontroll.app.data.remote.dto.PushTokenRequest
@@ -138,5 +141,22 @@ class KtorApiService @Inject constructor(
             header("X-User-Id", userId())
         }
         check(response.status.isSuccess()) { "Unregister push token failed: ${response.status}" }
+    }
+
+    override suspend fun sendCallSignal(request: CallSignalRequest): CallSignalResponse {
+        val response: HttpResponse = client.post("/v1/calls/signal") {
+            header("X-User-Id", userId())
+            setBody(request)
+        }
+        check(response.status.isSuccess()) { "Call signal failed: ${response.status}" }
+        return response.body()
+    }
+
+    override suspend fun getIceServers(): IceServersResponse {
+        val response: HttpResponse = client.get("/v1/calls/ice-servers") {
+            header("X-User-Id", userId())
+        }
+        check(response.status.isSuccess()) { "Get ICE servers failed: ${response.status}" }
+        return response.body()
     }
 }

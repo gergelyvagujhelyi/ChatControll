@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.remote
 
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.data.remote.dto.CallSignalDto
 import com.chatcontroll.app.domain.repository.MessageRepository
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -16,6 +17,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -47,6 +51,9 @@ class WebSocketClient @Inject constructor(
             pingIntervalMillis = 30_000
         }
     }
+
+    private val _incomingCallSignals = MutableSharedFlow<CallSignalDto>(extraBufferCapacity = 16)
+    val incomingCallSignals: SharedFlow<CallSignalDto> = _incomingCallSignals.asSharedFlow()
 
     private var connectionJob: Job? = null
     private var reconnectDelay = INITIAL_RECONNECT_DELAY
@@ -135,6 +142,17 @@ class WebSocketClient @Inject constructor(
                     }
                 }
                 "pong" -> { /* Expected keepalive response */ }
+
+                "call_offer", "call_answer", "call_ice_candidate",
+                "call_hangup", "call_busy", "call_reject" -> {
+                    val signal = CallSignalDto(
+                        senderId = msg["sender_id"]?.jsonPrimitive?.content ?: return,
+                        signalType = msg["type"]?.jsonPrimitive?.content ?: return,
+                        callId = msg["call_id"]?.jsonPrimitive?.content ?: "",
+                        encryptedPayload = msg["encrypted_payload"]?.jsonPrimitive?.content ?: "",
+                    )
+                    _incomingCallSignals.tryEmit(signal)
+                }
             }
         } catch (e: Exception) {
             logger.warning("Failed to parse WebSocket message: ${e.message}")

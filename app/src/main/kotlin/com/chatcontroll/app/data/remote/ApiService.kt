@@ -7,6 +7,9 @@ import com.chatcontroll.app.data.remote.dto.KeyBundleDto
 import com.chatcontroll.app.data.remote.dto.PendingMessageDto
 import com.chatcontroll.app.data.remote.dto.PushTokenRequest
 import com.chatcontroll.app.data.remote.dto.ResolveShareCodeResponse
+import com.chatcontroll.app.data.remote.dto.CallSignalRequest
+import com.chatcontroll.app.data.remote.dto.CallSignalResponse
+import com.chatcontroll.app.data.remote.dto.IceServersResponse
 import com.chatcontroll.app.data.remote.dto.SendMessageRequest
 import com.chatcontroll.app.data.remote.dto.SendMessageResponse
 
@@ -38,4 +41,6 @@ interface ApiService {
     suspend fun acknowledgeMessages(request: AckRequest)
     suspend fun registerPushToken(request: PushTokenRequest)
     suspend fun unregisterPushToken()
+    suspend fun sendCallSignal(request: CallSignalRequest): CallSignalResponse
+    suspend fun getIceServers(): IceServersResponse
 }

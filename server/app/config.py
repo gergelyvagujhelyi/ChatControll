@@ -18,3 +18,7 @@ MAX_MESSAGES_PER_MINUTE: int = int(os.getenv("MAX_MESSAGES_PER_MINUTE", "60"))
 MAX_PENDING_MESSAGES_PER_USER: int = int(
     os.getenv("MAX_PENDING_MESSAGES_PER_USER", "1000")
 )
+TURN_ENABLED: bool = os.getenv("TURN_ENABLED", "true").lower() == "true"
+# For Android emulators, use 10.0.2.2 (host alias inside emulator).
+# For real devices, set to your server's public IP.
+TURN_RELAY_IP: str = os.getenv("TURN_RELAY_IP", "10.0.2.2")

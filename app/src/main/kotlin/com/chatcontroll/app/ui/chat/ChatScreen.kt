@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -47,6 +48,7 @@ import kotlinx.datetime.toLocalDateTime
 @Composable
 fun ChatScreen(
     onBack: () -> Unit,
+    onCallClick: (String, String) -> Unit = { _, _ -> },
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val messages by viewModel.messages.collectAsState()
@@ -106,6 +108,15 @@ fun ChatScreen(
                                 )
                             }
                         }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { onCallClick(viewModel.contactId, conversation?.contactDisplayName ?: "Unknown") }) {
+                        Icon(
+                            Icons.Default.Call,
+                            contentDescription = "Voice call",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 },
             )
