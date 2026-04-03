@@ -1,6 +1,7 @@
 package com.chatcontroll.app.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.chatcontroll.app.domain.model.DisappearingDuration
 import com.chatcontroll.app.domain.model.LockScreenPreviewMode
+import com.chatcontroll.app.ui.components.QrCodeImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,6 +94,16 @@ fun SettingsScreen(
                 title = "Your share code",
                 subtitle = shareCode ?: "Loading...",
             )
+            if (shareCode != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    QrCodeImage(content = shareCode!!)
+                }
+            }
 
             HorizontalDivider()
 

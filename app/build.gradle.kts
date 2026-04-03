@@ -36,8 +36,8 @@ android {
         applicationId = "com.vagujhelyigergely.chatcontroll"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -157,6 +157,9 @@ dependencies {
 
     // Bouncy Castle (ML-KEM / post-quantum crypto — PQC merged into bcprov since 1.78)
     implementation(libs.bouncycastle.provider)
+
+    // QR Code
+    implementation(libs.zxing.core)
 
     // WebRTC
     implementation(libs.webrtc)
