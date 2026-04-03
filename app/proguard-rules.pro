@@ -30,3 +30,7 @@
 
 # Crypto - keep all crypto engine implementations
 -keep class com.chatcontroll.app.crypto.** { *; }
+
+# Bouncy Castle - algorithms loaded via JCA reflection (Ed25519, X25519, ML-KEM)
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
