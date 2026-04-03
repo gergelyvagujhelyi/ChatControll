@@ -12,6 +12,7 @@ import com.chatcontroll.app.data.remote.dto.AckRequest
 import com.chatcontroll.app.data.remote.dto.SendMessageRequest
 import com.chatcontroll.app.domain.model.Message
 import com.chatcontroll.app.domain.model.MessageState
+import com.chatcontroll.app.crypto.ratchet.RatchetHeader
 import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.EncryptedEnvelope
 import com.chatcontroll.app.domain.repository.MessageRepository
@@ -20,6 +21,7 @@ import com.chatcontroll.app.domain.repository.SessionKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Instant
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -35,6 +37,7 @@ class MessageRepositoryImpl @Inject constructor(
 ) : MessageRepository {
 
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
+    private val headerJson = Json { ignoreUnknownKeys = true }
 
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
@@ -138,10 +141,17 @@ class MessageRepositoryImpl @Inject constructor(
         val receivedIds = mutableListOf<String>()
 
         for (dto in pending) {
+            // Extract KEM ciphertext from message header for PQC handshake
+            val kemCiphertext = try {
+                val nonce = Base64.decode(dto.nonce, Base64.NO_WRAP)
+                val header = headerJson.decodeFromString<RatchetHeader>(String(nonce, Charsets.UTF_8))
+                header.kemCiphertext?.let { Base64.decode(it, Base64.NO_WRAP) }
+            } catch (_: Exception) { null }
+
             // Auto-establish session if we don't have one for this sender
             var sessionKeys = keyManager.getCachedSessionKeys(dto.senderId)
             if (sessionKeys == null) {
-                sessionKeys = tryEstablishSession(dto.senderId)
+                sessionKeys = tryEstablishSession(dto.senderId, kemCiphertext)
             }
             if (sessionKeys == null) continue
 
@@ -195,7 +205,10 @@ class MessageRepositoryImpl @Inject constructor(
      * Fetch a sender's key bundle from the server and establish a crypto session.
      * Also saves them as a contact so future messages work.
      */
-    private suspend fun tryEstablishSession(remoteUserId: String): SessionKeys? {
+    private suspend fun tryEstablishSession(
+        remoteUserId: String,
+        inboundKemCiphertext: ByteArray? = null,
+    ): SessionKeys? {
         return try {
             val bundle = apiService.fetchKeyBundle(remoteUserId) ?: return null
             val localKeyPair = keyManager.loadIdentityKeyPair() ?: return null
@@ -213,6 +226,7 @@ class MessageRepositoryImpl @Inject constructor(
                     publicIdentityKey = pubIdKey,
                     pqcEncapsulationKey = pqcKey,
                 ),
+                inboundKemCiphertext = inboundKemCiphertext,
             )
             keyManager.cacheSessionKeys(remoteUserId, sessionKeys)
 

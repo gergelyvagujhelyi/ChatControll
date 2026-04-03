@@ -17,4 +17,6 @@ data class RatchetHeader(
     val previousChainLength: Int,
     /** Index in the current sending chain. */
     val messageNumber: Int,
+    /** ML-KEM ciphertext for PQC key establishment (base64, first message only). */
+    val kemCiphertext: String? = null,
 )

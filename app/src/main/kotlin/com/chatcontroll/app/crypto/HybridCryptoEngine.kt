@@ -48,6 +48,7 @@ class HybridCryptoEngine @Inject constructor(
     override suspend fun establishSession(
         localIdentity: KeyPair,
         remotePublicBundle: PublicKeyBundle,
+        inboundKemCiphertext: ByteArray?,
     ): SessionKeys {
         // Classical X25519 shared secret
         val classicalSecret = classicalKeyAgreement.agree(

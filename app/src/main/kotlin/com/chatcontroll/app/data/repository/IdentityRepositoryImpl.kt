@@ -9,6 +9,7 @@ import com.chatcontroll.app.data.remote.dto.BootstrapRequest
 import com.chatcontroll.app.domain.model.Contact
 import com.chatcontroll.app.domain.model.Identity
 import com.chatcontroll.app.crypto.PqcProvider
+import com.chatcontroll.app.domain.model.KeyType
 import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
@@ -44,7 +45,7 @@ class IdentityRepositoryImpl @Inject constructor(
         )
     }
 
-    override suspend fun getOrCreateIdentity(): Identity {
+    override suspend fun getOrCreateIdentity(keyType: KeyType): Identity {
         getIdentity()?.let { return it }
 
         // Reuse keys from a previous failed attempt, or generate new ones
@@ -54,17 +55,20 @@ class IdentityRepositoryImpl @Inject constructor(
             kp
         }
 
-        // Reuse PQC keys from a previous failed attempt, or generate new ones
-        val pqcEk = keyManager.getPqcEncapsulationKey() ?: run {
-            try {
-                val kemKeyPair = pqcProvider.generateKemKeyPair()
-                keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
-                kemKeyPair.encapsulationKey
-            } catch (e: Exception) {
-                // PQC is optional — proceed without it if BC fails on this device
-                android.util.Log.w("Identity", "PQC key gen failed, proceeding without: ${e.message}")
-                ByteArray(0)
+        // Generate PQC keys only if the user chose hybrid post-quantum
+        val pqcEk = if (keyType == KeyType.HYBRID_POST_QUANTUM) {
+            keyManager.getPqcEncapsulationKey() ?: run {
+                try {
+                    val kemKeyPair = pqcProvider.generateKemKeyPair()
+                    keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
+                    kemKeyPair.encapsulationKey
+                } catch (e: Exception) {
+                    android.util.Log.w("Identity", "PQC key gen failed, falling back to classical: ${e.message}")
+                    ByteArray(0)
+                }
             }
+        } else {
+            ByteArray(0)
         }
 
         // Register with relay server

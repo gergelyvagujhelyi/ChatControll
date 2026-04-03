@@ -14,10 +14,12 @@ interface CryptoEngine {
     suspend fun generateIdentity(): KeyPair
 
     /** Perform hybrid key establishment with a peer's public key bundle.
-     *  Combines X25519 + ML-KEM encapsulation results via HKDF. */
+     *  Combines X25519 + ML-KEM encapsulation results via HKDF.
+     *  @param inboundKemCiphertext KEM ciphertext from the initiator's first message (responder only). */
     suspend fun establishSession(
         localIdentity: KeyPair,
         remotePublicBundle: PublicKeyBundle,
+        inboundKemCiphertext: ByteArray? = null,
     ): SessionKeys
 
     /** Encrypt a plaintext message for the given session. Returns ciphertext + nonce. */

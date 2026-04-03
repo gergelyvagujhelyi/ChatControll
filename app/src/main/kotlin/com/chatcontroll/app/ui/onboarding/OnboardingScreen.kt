@@ -4,8 +4,11 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,19 +20,27 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.chatcontroll.app.domain.model.KeyType
 
 @Composable
 fun OnboardingScreen(
@@ -43,7 +54,10 @@ fun OnboardingScreen(
             onContinue = { viewModel.advanceToPrivacy() },
         )
         OnboardingState.PrivacyExplainer -> PrivacyStep(
-            onContinue = { viewModel.advanceToNotifications() },
+            onContinue = { viewModel.advanceToKeySelection() },
+        )
+        OnboardingState.KeySelection -> KeySelectionStep(
+            onSelected = { keyType -> viewModel.selectKeyType(keyType) },
         )
         OnboardingState.NotificationPermission -> NotificationStep(
             onContinue = { viewModel.createGuestIdentity() },
@@ -86,6 +100,145 @@ private fun PrivacyStep(onContinue: () -> Unit) {
         buttonText = "I understand",
         onButtonClick = onContinue,
     )
+}
+
+@Composable
+private fun KeySelectionStep(onSelected: (KeyType) -> Unit) {
+    var selected by remember { mutableStateOf(KeyType.HYBRID_POST_QUANTUM) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            modifier = Modifier.size(72.dp),
+            tint = MaterialTheme.colorScheme.primary,
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "Choose your key type",
+            style = MaterialTheme.typography.headlineLarge,
+            textAlign = TextAlign.Center,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "This determines the cryptographic algorithms used for your identity.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        KeyOptionCard(
+            title = "Standard",
+            description = "X25519 + Ed25519\n\nBattle-tested, fast, and trusted by millions.",
+            tag = "Legacy",
+            isSelected = selected == KeyType.CLASSICAL,
+            onClick = { selected = KeyType.CLASSICAL },
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        KeyOptionCard(
+            title = "Post-Quantum",
+            description = "ML-KEM-768 + X25519\n\nProtects against future quantum computers. Uses NIST-standardized algorithms alongside classical crypto as a safety net.",
+            tag = "Recommended",
+            isSelected = selected == KeyType.HYBRID_POST_QUANTUM,
+            onClick = { selected = KeyType.HYBRID_POST_QUANTUM },
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = { onSelected(selected) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Continue")
+        }
+    }
+}
+
+@Composable
+private fun KeyOptionCard(
+    title: String,
+    description: String,
+    tag: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    val borderColor = if (isSelected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        border = BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = borderColor,
+        ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            RadioButton(
+                selected = isSelected,
+                onClick = onClick,
+            )
+            Column(
+                modifier = Modifier.padding(start = 8.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = tag,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (tag == "Recommended") {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.tertiary
+                        },
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+            }
+        }
+    }
 }
 
 @Composable

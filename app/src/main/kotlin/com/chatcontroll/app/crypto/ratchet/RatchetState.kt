@@ -27,6 +27,10 @@ data class RatchetState(
     /** Skipped message keys we haven't used yet (for out-of-order delivery).
      *  Key: (ratchetPublicKey hex, messageNumber) → message key bytes. */
     val skippedMessageKeys: MutableMap<Pair<String, Int>, ByteArray> = mutableMapOf(),
+    /** KEM ciphertext to attach to the first outbound message header (initiator only). */
+    var pendingKemCiphertext: ByteArray? = null,
+    /** Whether PQC secret has been mixed into this session's root key. */
+    var pqcEstablished: Boolean = false,
 ) {
     companion object {
         /** Maximum number of skipped message keys to store per chain.

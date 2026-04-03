@@ -54,19 +54,48 @@ class RatchetSessionManager @Inject constructor(
     override suspend fun establishSession(
         localIdentity: KeyPair,
         remotePublicBundle: PublicKeyBundle,
+        inboundKemCiphertext: ByteArray?,
     ): SessionKeys {
         // X25519 key agreement — both sides derive the same shared secret.
-        // ML-KEM is not used here because KEM encapsulation is randomized:
-        // each side would get a different secret without a proper handshake
-        // protocol to exchange the KEM ciphertext. PQC will be added once
-        // a KEM-exchange round-trip is implemented.
         val classicalSecret = classicalKeyAgreement.agree(
             privateKey = localIdentity.privateIdentityKey,
             remotePublicKey = remotePublicBundle.publicIdentityKey,
         )
 
+        // Deterministic initiator role: the party with the "smaller" public key
+        val isInitiator = localIdentity.publicIdentityKey.toHex() <
+            remotePublicBundle.publicIdentityKey.toHex()
+
+        // PQC KEM handshake: initiator encapsulates, responder decapsulates
+        var pqcSecret = ByteArray(0)
+        var kemCiphertext: ByteArray? = null
+
+        if (isInitiator && remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
+            // Initiator: encapsulate against the remote's ML-KEM public key
+            try {
+                val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
+                pqcSecret = encapsulation.sharedSecret
+                kemCiphertext = encapsulation.ciphertext
+            } catch (e: Exception) {
+                android.util.Log.w("RatchetSession", "PQC encapsulation failed, classical only: ${e.message}")
+            }
+        } else if (!isInitiator && inboundKemCiphertext != null) {
+            // Responder: decapsulate using our local ML-KEM decapsulation key
+            try {
+                val decapsulationKey = keyManager.getPqcDecapsulationKey()
+                if (decapsulationKey != null) {
+                    pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("RatchetSession", "PQC decapsulation failed, classical only: ${e.message}")
+            }
+        }
+
+        // Combine classical + PQC secrets via HKDF
+        val ikm = if (pqcSecret.isNotEmpty()) classicalSecret + pqcSecret else classicalSecret
+
         val sharedSecret = hkdfSha256(
-            ikm = classicalSecret,
+            ikm = ikm,
             salt = "ChatControll-v1-ratchet-init".toByteArray(),
             info = "hybrid-key-establishment".toByteArray(),
             length = 32,
@@ -77,11 +106,6 @@ class RatchetSessionManager @Inject constructor(
         )
 
         // Derive two directional chain keys so both sides can send immediately.
-        // The "smaller" public key's owner uses chain A to send and chain B to receive;
-        // the "larger" key's owner uses chain B to send and chain A to receive.
-        val isInitiator = localIdentity.publicIdentityKey.toHex() <
-            remotePublicBundle.publicIdentityKey.toHex()
-
         val chainMaterial = hkdfSha256(
             ikm = sharedSecret,
             salt = "ChatControll-v1-chains".toByteArray(),
@@ -102,6 +126,8 @@ class RatchetSessionManager @Inject constructor(
             rootKey = sharedSecret,
             sendingChainKey = ChainKey(if (isInitiator) chainA else chainB, 0),
             receivingChainKey = ChainKey(if (isInitiator) chainB else chainA, 0),
+            pendingKemCiphertext = kemCiphertext,
+            pqcEstablished = pqcSecret.isNotEmpty(),
         )
 
         sessions[sessionId] = state
@@ -118,12 +144,22 @@ class RatchetSessionManager @Inject constructor(
             ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
         val (header, ciphertext) = ratchet.encrypt(state, plaintext)
-        val headerJson = json.encodeToString(header)
+
+        // Attach PQC KEM ciphertext to the first outbound message header
+        val finalHeader = if (state.pendingKemCiphertext != null) {
+            val ct = state.pendingKemCiphertext!!
+            state.pendingKemCiphertext = null
+            header.copy(kemCiphertext = Base64.encodeToString(ct, Base64.NO_WRAP))
+        } else {
+            header
+        }
+
+        val headerJson = json.encodeToString(finalHeader)
 
         return EncryptedEnvelope(
             ciphertext = ciphertext,
             nonce = headerJson.toByteArray(Charsets.UTF_8),
-            ephemeralPublicKey = Base64.decode(header.publicKey, Base64.NO_WRAP),
+            ephemeralPublicKey = Base64.decode(finalHeader.publicKey, Base64.NO_WRAP),
         )
     }
 
