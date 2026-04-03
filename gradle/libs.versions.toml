@@ -25,6 +25,7 @@ turbine = "1.2.0"
 security-crypto = "1.1.0-alpha06"
 bouncycastle = "1.79"
 webrtc = "144.7559.01"
+zxing = "3.5.3"
 
 [libraries]
 # AndroidX Core
@@ -98,6 +99,9 @@ webrtc = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webr
 
 # Ktor WebSocket
 ktor-client-websockets = { group = "io.ktor", name = "ktor-client-websockets", version.ref = "ktor" }
+
+# QR Code
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }
