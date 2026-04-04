@@ -80,7 +80,8 @@ class MainActivity : ComponentActivity() {
 
                 // Navigate to CallScreen when an incoming call arrives
                 val incomingCall by callManager.callState.collectAsState()
-                LaunchedEffect(incomingCall) {
+                LaunchedEffect(incomingCall, startDestination) {
+                    if (startDestination == null) return@LaunchedEffect
                     val call = incomingCall
                     if (call != null &&
                         call.direction == CallDirection.INCOMING &&

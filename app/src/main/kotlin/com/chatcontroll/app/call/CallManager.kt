@@ -61,6 +61,7 @@ class CallManager @Inject constructor(
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
     private val pendingIceCandidates = mutableListOf<IceCandidateDto>()
+    private var remoteDescriptionSet = false
 
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
@@ -146,6 +147,7 @@ class CallManager @Inject constructor(
                 val answerSdp = webRtcEngine!!.handleRemoteOffer(sdpPayload.sdp)
                 Log.d(TAG, "Created answer SDP, length=${answerSdp.length}")
 
+                remoteDescriptionSet = true
                 Log.d(TAG, "Applying ${pendingIceCandidates.size} pending ICE candidates")
                 for (candidate in pendingIceCandidates) {
                     webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
@@ -180,21 +182,17 @@ class CallManager @Inject constructor(
     }
 
     fun toggleMute() {
-        _callState.update { state ->
-            if (state == null) return
-            val newMuted = !state.isMuted
-            webRtcEngine?.setMicEnabled(!newMuted)
-            state.copy(isMuted = newMuted)
-        }
+        val state = _callState.value ?: return
+        val newMuted = !state.isMuted
+        webRtcEngine?.setMicEnabled(!newMuted)
+        _callState.update { it?.copy(isMuted = newMuted) }
     }
 
     fun toggleSpeaker() {
-        _callState.update { state ->
-            if (state == null) return
-            val newSpeaker = !state.isSpeakerOn
-            audioManager.isSpeakerphoneOn = newSpeaker
-            state.copy(isSpeakerOn = newSpeaker)
-        }
+        val state = _callState.value ?: return
+        val newSpeaker = !state.isSpeakerOn
+        audioManager.isSpeakerphoneOn = newSpeaker
+        _callState.update { it?.copy(isSpeakerOn = newSpeaker) }
     }
 
     private var _pendingOfferPayload: String? = null
@@ -207,6 +205,7 @@ class CallManager @Inject constructor(
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
         webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
 
+        remoteDescriptionSet = true
         // Apply ICE candidates that arrived before the answer
         for (candidate in pendingIceCandidates) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
@@ -220,8 +219,7 @@ class CallManager @Inject constructor(
         val candidateJson = decryptPayload(signal.senderId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
-        val status = _callState.value?.status
-        if (webRtcEngine != null && status != CallStatus.RINGING && status != CallStatus.CONNECTING) {
+        if (webRtcEngine != null && remoteDescriptionSet) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
         } else {
             pendingIceCandidates.add(candidate)
@@ -238,6 +236,7 @@ class CallManager @Inject constructor(
         webRtcEngine = null
         _pendingOfferPayload = null
         pendingIceCandidates.clear()
+        remoteDescriptionSet = false
         abandonAudioFocus()
 
         // Dispose WebRTC resources off the main thread to avoid ANR

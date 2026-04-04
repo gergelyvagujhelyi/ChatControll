@@ -20,6 +20,9 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 
+MAX_WS_CONNECTIONS_PER_USER = 5
+
+
 class WebSocketManager:
     """Manages active WebSocket connections per user."""
 
@@ -31,6 +34,14 @@ class WebSocketManager:
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
         async with self._lock:
+            if len(self._connections[user_id]) >= MAX_WS_CONNECTIONS_PER_USER:
+                # Evict the oldest connection
+                oldest = next(iter(self._connections[user_id]))
+                self._connections[user_id].discard(oldest)
+                try:
+                    await oldest.close(code=4008, reason="Too many connections")
+                except Exception:
+                    pass
             self._connections[user_id].add(websocket)
         logger.info("WebSocket connected: %s", user_id[:8])
 

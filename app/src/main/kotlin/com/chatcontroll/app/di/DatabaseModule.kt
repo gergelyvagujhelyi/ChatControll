@@ -46,6 +46,7 @@ object DatabaseModule {
         )
             .openHelperFactory(factory)
             .addMigrations(MIGRATION_1_2)
+            .fallbackToDestructiveMigrationFrom(1)
             .build()
     }
 

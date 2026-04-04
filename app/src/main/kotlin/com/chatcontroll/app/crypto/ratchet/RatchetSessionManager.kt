@@ -106,9 +106,15 @@ class RatchetSessionManager @Inject constructor(
             length = 32,
         )
 
-        val sessionId = sha256Hex(
+        // Sort keys so both peers compute the same sessionId regardless of role
+        val localHex = localIdentity.publicIdentityKey.toHex()
+        val remoteHex = remotePublicBundle.publicIdentityKey.toHex()
+        val orderedKeys = if (localHex < remoteHex) {
             localIdentity.publicIdentityKey + remotePublicBundle.publicIdentityKey
-        )
+        } else {
+            remotePublicBundle.publicIdentityKey + localIdentity.publicIdentityKey
+        }
+        val sessionId = sha256Hex(orderedKeys)
 
         // Derive two directional chain keys so both sides can send immediately.
         val chainMaterial = hkdfSha256(
@@ -210,27 +216,23 @@ class RatchetSessionManager @Inject constructor(
     // ── Session persistence ──────────────────────────────────────────
 
     private fun persistSession(sessionId: String, state: RatchetState) {
-        try {
-            val dto = SerializableRatchetState(
-                dhPublicKey = state.dhKeyPair.publicKey.b64(),
-                dhPrivateKey = state.dhKeyPair.privateKey.b64(),
-                remoteDhPublicKey = state.remoteDhPublicKey?.b64(),
-                rootKey = state.rootKey.b64(),
-                sendingChainKey = state.sendingChainKey?.key?.b64(),
-                sendingChainIndex = state.sendingChainKey?.index ?: 0,
-                receivingChainKey = state.receivingChainKey?.key?.b64(),
-                receivingChainIndex = state.receivingChainKey?.index ?: 0,
-                previousSendingChainLength = state.previousSendingChainLength,
-                skippedKeys = state.skippedMessageKeys.map { (k, v) ->
-                    SkippedKeyEntry(k.first, k.second, v.b64())
-                },
-                pendingKemCiphertext = state.pendingKemCiphertext?.b64(),
-                pqcEstablished = state.pqcEstablished,
-            )
-            keyManager.saveRatchetState(sessionId, json.encodeToString(dto))
-        } catch (e: Exception) {
-            Log.w("RatchetSession", "Failed to persist session $sessionId: ${e.message}")
-        }
+        val dto = SerializableRatchetState(
+            dhPublicKey = state.dhKeyPair.publicKey.b64(),
+            dhPrivateKey = state.dhKeyPair.privateKey.b64(),
+            remoteDhPublicKey = state.remoteDhPublicKey?.b64(),
+            rootKey = state.rootKey.b64(),
+            sendingChainKey = state.sendingChainKey?.key?.b64(),
+            sendingChainIndex = state.sendingChainKey?.index ?: 0,
+            receivingChainKey = state.receivingChainKey?.key?.b64(),
+            receivingChainIndex = state.receivingChainKey?.index ?: 0,
+            previousSendingChainLength = state.previousSendingChainLength,
+            skippedKeys = state.skippedMessageKeys.map { (k, v) ->
+                SkippedKeyEntry(k.first, k.second, v.b64())
+            },
+            pendingKemCiphertext = state.pendingKemCiphertext?.b64(),
+            pqcEstablished = state.pqcEstablished,
+        )
+        keyManager.saveRatchetState(sessionId, json.encodeToString(dto))
     }
 
     private fun loadPersistedSession(sessionId: String): RatchetState? {

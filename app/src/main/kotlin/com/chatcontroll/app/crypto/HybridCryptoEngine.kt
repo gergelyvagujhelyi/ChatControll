@@ -87,7 +87,15 @@ class HybridCryptoEngine @Inject constructor(
             length = 64,
         )
 
-        val sessionId = sha256Hex(localIdentity.publicIdentityKey + remotePublicBundle.publicIdentityKey)
+        // Sort keys so both peers compute the same sessionId regardless of role
+        val localHex = localIdentity.publicIdentityKey.joinToString("") { "%02x".format(it) }
+        val remoteHex = remotePublicBundle.publicIdentityKey.joinToString("") { "%02x".format(it) }
+        val orderedKeys = if (localHex < remoteHex) {
+            localIdentity.publicIdentityKey + remotePublicBundle.publicIdentityKey
+        } else {
+            remotePublicBundle.publicIdentityKey + localIdentity.publicIdentityKey
+        }
+        val sessionId = sha256Hex(orderedKeys)
 
         // Deterministic key assignment so both sides agree
         val keyA = combinedSecret.copyOfRange(0, 32)

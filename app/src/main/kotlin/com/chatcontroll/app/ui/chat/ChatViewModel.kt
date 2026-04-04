@@ -56,12 +56,13 @@ class ChatViewModel @Inject constructor(
             conversationRepository.clearUnread(conversationId)
         }
         // Poll for new messages while the chat screen is open
+        // (supplements WebSocket/FCM for reliability; kept infrequent to save battery)
         viewModelScope.launch {
             while (true) {
                 try {
                     messageRepository.fetchPendingFromServer()
                 } catch (_: Exception) { }
-                kotlinx.coroutines.delay(3_000)
+                kotlinx.coroutines.delay(15_000)
             }
         }
     }

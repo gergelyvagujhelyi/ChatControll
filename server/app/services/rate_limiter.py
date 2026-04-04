@@ -27,10 +27,10 @@ async def check_rate_limit(db: AsyncSession, user_id: str) -> bool:
 
     if rate is None:
         try:
-            db.add(RateLimit(user_id=user_id, message_count=1, window_start=now))
-            await db.flush()
+            async with db.begin_nested():
+                db.add(RateLimit(user_id=user_id, message_count=1, window_start=now))
+                await db.flush()
         except IntegrityError:
-            await db.rollback()
             # Another request inserted the row concurrently; re-read
             result = await db.execute(
                 select(RateLimit).where(RateLimit.user_id == user_id)
