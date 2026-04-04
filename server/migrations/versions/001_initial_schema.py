@@ -38,7 +38,7 @@ def upgrade() -> None:
         sa.Column("encrypted_body", sa.Text, nullable=False),
         sa.Column("nonce", sa.Text, nullable=False),
         sa.Column("ephemeral_public_key", sa.Text, nullable=False, server_default=""),
-        sa.Column("timestamp_ms", sa.Integer, nullable=True),
+        sa.Column("timestamp_ms", sa.BigInteger, nullable=True),
         sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
     )
     op.create_index("ix_pending_message_id", "pending_messages", ["message_id"], unique=True)
