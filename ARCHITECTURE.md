@@ -39,7 +39,7 @@
 - If classical crypto is broken by a quantum computer, the PQC component provides protection.
 - The `CryptoEngine` interface allows swapping implementations without redesigning the app.
 
-**Current state**: ML-KEM is implemented as a mock (`MockPqcProvider`). The classical X25519 component provides the actual security. The hybrid plumbing is fully functional and ready for a real ML-KEM library.
+**Current state**: `BouncyCastlePqcProvider` provides production ML-KEM-768 via Bouncy Castle 1.79+. The hybrid X25519 + ML-KEM key establishment is fully functional. `MockPqcProvider` remains available as a testing fallback.
 
 **Tradeoff**: Larger key bundles and slight handshake overhead. Acceptable for a messaging app where handshakes are infrequent.
 

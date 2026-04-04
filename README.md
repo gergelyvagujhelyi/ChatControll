@@ -140,7 +140,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture decision record
 
 See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known limitations.
 
-## Implemented Improvements
+## Implemented Features
 
 1. **Production ML-KEM-768** — `BouncyCastlePqcProvider` uses Bouncy Castle 1.79+ for real NIST FIPS 203 post-quantum key encapsulation. The hybrid X25519 + ML-KEM key establishment is fully functional.
 
@@ -148,13 +148,19 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 3. **Python relay server** — Full FastAPI backend in `server/` with SQLite/PostgreSQL support, WebSocket real-time delivery, FCM push forwarding, rate limiting, and comprehensive test suite. `KtorApiService` + `WebSocketClient` connect the Android app to it.
 
-## Next 3 Highest-Priority Improvements
+4. **Encrypted voice calls** — WebRTC-based 1:1 voice calls with end-to-end encrypted signaling. Ephemeral HMAC-based TURN credentials (coturn-compatible) are generated per session.
 
-1. **Signed request authentication** — Add Ed25519 request signatures to the `X-User-Id` header so the relay server can verify sender identity and prevent impersonation.
+5. **Ed25519 authentication** — All API requests are authenticated with Ed25519 signed tokens. Message envelopes are signed by the sender and verified by the recipient.
 
-2. **Ratchet state persistence** — Serialize Double Ratchet session state to the encrypted database so sessions survive app restarts without re-keying.
+6. **Security hardening (v0.3.0)** — Protected metrics endpoint, generic auth errors, WebSocket call signal validation and rate limiting, debug logging gated behind `BuildConfig.DEBUG`, certificate pinning configuration.
 
-3. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.
+## Next Priorities
+
+1. **Ratchet state persistence** — Serialize Double Ratchet session state to the encrypted database so sessions survive app restarts without re-keying.
+
+2. **Multi-device support** �� Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.
+
+3. **Key rotation protocol** — Periodic identity key rotation for compromise recovery and device migration.
 
 ## License
 
