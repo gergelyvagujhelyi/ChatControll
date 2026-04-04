@@ -74,17 +74,14 @@ class IdentityRepositoryImpl @Inject constructor(
             kp
         }
 
-        // Generate PQC keys only if the user chose hybrid post-quantum
+        // Generate PQC keys only if the user chose hybrid post-quantum.
+        // If the user explicitly chose PQC, key generation MUST succeed —
+        // silent fallback to classical would be a cryptographic downgrade.
         val pqcEk = if (keyType == KeyType.HYBRID_POST_QUANTUM) {
             keyManager.getPqcEncapsulationKey() ?: run {
-                try {
-                    val kemKeyPair = pqcProvider.generateKemKeyPair()
-                    keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
-                    kemKeyPair.encapsulationKey
-                } catch (e: Exception) {
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("Identity", "PQC key gen failed, falling back to classical: ${e.message}")
-                    ByteArray(0)
-                }
+                val kemKeyPair = pqcProvider.generateKemKeyPair()
+                keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
+                kemKeyPair.encapsulationKey
             }
         } else {
             ByteArray(0)

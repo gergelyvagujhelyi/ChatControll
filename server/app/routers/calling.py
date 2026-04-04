@@ -46,6 +46,12 @@ async def relay_signal(
     if len(times) >= _MAX_SIGNALS_PER_MINUTE:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     times.append(now)
+
+    # Periodically prune users with no recent signals to prevent memory leak
+    if len(_signal_times) > 1000:
+        stale = [uid for uid, ts in _signal_times.items() if not ts]
+        for uid in stale:
+            del _signal_times[uid]
     delivered = await ws_manager.relay_call_signal(
         sender_id=x_user_id,
         recipient_id=request.recipient_id,

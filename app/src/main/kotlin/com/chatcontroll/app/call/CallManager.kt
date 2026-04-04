@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -69,7 +70,8 @@ class CallManager @Inject constructor(
     private val _callState = MutableStateFlow<CallState?>(null)
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
-    private val pendingIceCandidates = mutableListOf<IceCandidateDto>()
+    private val signalMutex = kotlinx.coroutines.sync.Mutex()
+    private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     private var remoteDescriptionSet = false
     /** Track seen signal signatures with timestamps to reject replays.
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS]. */
@@ -105,6 +107,7 @@ class CallManager @Inject constructor(
     fun handleIncomingSignal(signal: CallSignalDto) {
         logDebug("Incoming signal: ${signal.signalType}")
         scope.launch {
+            signalMutex.withLock {
             try {
                 // Verify call signal signature (mandatory)
                 val localUserId = keyManager.getUserId() ?: return@launch
@@ -155,6 +158,7 @@ class CallManager @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to handle signal: ${signal.signalType}", e)
             }
+            } // signalMutex
         }
     }
 
@@ -183,12 +187,13 @@ class CallManager @Inject constructor(
         _callState.value = state.copy(status = CallStatus.CONNECTING)
 
         scope.launch {
+            signalMutex.withLock {
             try {
                 logDebug("Accepting incoming call")
                 setupWebRtc(state.peerId)
 
                 // Decrypt the offer SDP
-                val sdpJson = decryptPayload(state.peerId, state.callId, _pendingOfferPayload ?: return@launch)
+                val sdpJson = decryptPayload(state.peerId, state.callId, _pendingOfferPayload ?: return@withLock)
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
                 logDebug("Decoded offer SDP")
 
@@ -211,6 +216,7 @@ class CallManager @Inject constructor(
                 Log.e(TAG, "Failed to accept call", e)
                 endCall(CallStatus.FAILED)
             }
+            } // signalMutex
         }
     }
 

@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import defaultdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -37,6 +38,10 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
 })
 _MAX_CALL_OFFERS_PER_MINUTE = 10
 _MAX_SIGNALS_PER_MINUTE = 100
+
+# Per-user rate limit state shared across all WebSocket connections
+_ws_signal_times: dict[str, list[float]] = defaultdict(list)
+_ws_call_offer_times: dict[str, list[float]] = defaultdict(list)
 
 
 @router.websocket("/v1/ws")
@@ -110,8 +115,6 @@ async def websocket_endpoint(
         )
 
         # Keep alive loop — idle connections are closed after timeout
-        call_offer_times: list[float] = []
-        signal_times: list[float] = []
         while True:
             try:
                 raw = await asyncio.wait_for(
@@ -165,26 +168,28 @@ async def websocket_endpoint(
                     )
                     continue
 
-                # Global per-connection signal rate limit
+                # Per-user signal rate limit (shared across all connections)
                 now_sig = time.monotonic()
-                signal_times = [t for t in signal_times if now_sig - t < 60]
-                if len(signal_times) >= _MAX_SIGNALS_PER_MINUTE:
+                sig_times = _ws_signal_times[user_id]
+                sig_times[:] = [t for t in sig_times if now_sig - t < 60]
+                if len(sig_times) >= _MAX_SIGNALS_PER_MINUTE:
                     await websocket.send_text(
                         json.dumps({"type": "error", "message": "Rate limit exceeded"})
                     )
                     continue
-                signal_times.append(now_sig)
+                sig_times.append(now_sig)
 
-                # Rate limit call_offer signals per connection
+                # Per-user call_offer rate limit
                 if msg_type == "call_offer":
                     now = time.monotonic()
-                    call_offer_times = [t for t in call_offer_times if now - t < 60]
-                    if len(call_offer_times) >= _MAX_CALL_OFFERS_PER_MINUTE:
+                    offer_times = _ws_call_offer_times[user_id]
+                    offer_times[:] = [t for t in offer_times if now - t < 60]
+                    if len(offer_times) >= _MAX_CALL_OFFERS_PER_MINUTE:
                         await websocket.send_text(
                             json.dumps({"type": "error", "message": "Rate limit exceeded"})
                         )
                         continue
-                    call_offer_times.append(now)
+                    offer_times.append(now)
 
                 await ws_manager.relay_call_signal(
                     sender_id=user_id,
@@ -202,3 +207,7 @@ async def websocket_endpoint(
     finally:
         if user_id:
             await ws_manager.disconnect(user_id, websocket)
+            # Clean up rate limit entries if user has no more connections
+            if not ws_manager.is_online(user_id):
+                _ws_signal_times.pop(user_id, None)
+                _ws_call_offer_times.pop(user_id, None)
