@@ -6,13 +6,16 @@ at ``/metrics`` in Prometheus text exposition format.
 No external dependencies — uses stdlib only.
 """
 
+import secrets
 import time
 from collections import defaultdict
 from threading import Lock
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import PlainTextResponse
+from starlette.responses import JSONResponse, PlainTextResponse
+
+from app.config import METRICS_TOKEN
 
 
 class Metrics:
@@ -85,5 +88,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def metrics_endpoint(_request: Request) -> PlainTextResponse:
+def metrics_endpoint(request: Request) -> PlainTextResponse:
+    if METRICS_TOKEN:
+        auth = request.headers.get("authorization", "")
+        if not auth.startswith("Bearer ") or not secrets.compare_digest(
+            auth[7:], METRICS_TOKEN
+        ):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return PlainTextResponse(metrics.expose(), media_type="text/plain; version=0.0.4")

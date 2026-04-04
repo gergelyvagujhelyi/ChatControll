@@ -2,17 +2,23 @@
 
 Protects bootstrap, key lookup, and share-code resolution from brute-force.
 Uses a simple sliding-window counter per IP address with periodic cleanup.
+
+WARNING: This rate limiter is per-process and stored in memory only.
+In multi-worker deployments (e.g. multiple uvicorn workers), each worker
+maintains its own counters, effectively multiplying the allowed rate by
+the number of workers. For multi-worker setups, use a shared store
+(Redis, database) instead.
 """
 
 import asyncio
+import os
 import time
 from collections import defaultdict
 from typing import NamedTuple
 
 from fastapi import HTTPException, Request
 
-# Defaults: 30 requests per minute per IP
-IP_RATE_LIMIT = 30
+IP_RATE_LIMIT = int(os.getenv("IP_RATE_LIMIT", "30"))
 IP_RATE_WINDOW = 60  # seconds
 
 

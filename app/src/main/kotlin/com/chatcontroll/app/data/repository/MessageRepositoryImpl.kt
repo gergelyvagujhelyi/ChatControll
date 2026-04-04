@@ -82,6 +82,13 @@ class MessageRepositoryImpl @Inject constructor(
         )
         messageDao.insert(entity)
 
+        // Sign the envelope for recipient verification
+        val sigPayload = senderId.toByteArray(Charsets.UTF_8) +
+            recipientId.toByteArray(Charsets.UTF_8) +
+            envelope.nonce + envelope.ciphertext
+        val signature = keyManager.sign(sigPayload)
+        val signatureB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
+
         // Send to server
         try {
             val response = apiService.sendMessage(
@@ -89,6 +96,7 @@ class MessageRepositoryImpl @Inject constructor(
                     recipientId = recipientId,
                     encryptedBody = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP),
                     nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
+                    signature = signatureB64,
                 )
             )
             messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
@@ -128,11 +136,18 @@ class MessageRepositoryImpl @Inject constructor(
 
             val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
+            val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
+            val retrySigPayload = retrySenderId.toByteArray(Charsets.UTF_8) +
+                entity.recipientId.toByteArray(Charsets.UTF_8) +
+                envelope.nonce + envelope.ciphertext
+            val retrySignature = keyManager.sign(retrySigPayload)
+
             val response = apiService.sendMessage(
                 SendMessageRequest(
                     recipientId = entity.recipientId,
                     encryptedBody = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP),
                     nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
+                    signature = Base64.encodeToString(retrySignature, Base64.NO_WRAP),
                 )
             )
             messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
@@ -186,6 +201,23 @@ class MessageRepositoryImpl @Inject constructor(
                 ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
                 nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
             )
+
+            // Verify sender signature if present
+            if (dto.signature.isNotEmpty()) {
+                val contact = contactDao.getByUserId(dto.senderId)
+                if (contact != null) {
+                    val sigPayload = dto.senderId.toByteArray(Charsets.UTF_8) +
+                        localUserId.toByteArray(Charsets.UTF_8) +
+                        envelope.nonce + envelope.ciphertext
+                    val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+                    val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
+                    if (!valid) {
+                        android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
+                        receivedIds.add(dto.messageId)
+                        continue
+                    }
+                }
+            }
 
             val plaintext = try {
                 val result = cryptoEngine.decrypt(sessionKeys, envelope)

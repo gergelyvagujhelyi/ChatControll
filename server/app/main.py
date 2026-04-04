@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, TURN_ENABLED, TURN_RELAY_IP
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_ENABLED, TURN_RELAY_IP
 from sqlalchemy import text
 
 from app.database import async_session, engine
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ChatControll Relay",
     description="Privacy-first encrypted message relay server.",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
     # Disable docs in production
     docs_url="/docs" if DEBUG else None,
@@ -131,7 +131,8 @@ app.include_router(websocket.router)
 app.include_router(calling.router)
 
 
-app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], tags=["ops"], include_in_schema=False)
+if DEBUG or METRICS_TOKEN:
+    app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], tags=["ops"], include_in_schema=False)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["health"])
@@ -142,6 +143,6 @@ async def health_check() -> HealthResponse:
     except Exception:
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "version": "0.2.0", "detail": "Database unreachable"},
+            content={"status": "unhealthy", "version": "0.3.0", "detail": "Database unreachable"},
         )
     return HealthResponse()

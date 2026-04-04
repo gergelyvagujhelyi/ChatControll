@@ -6,6 +6,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.util.Base64
 import android.util.Log
+import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
@@ -83,13 +84,13 @@ class CallManager @Inject constructor(
 
         scope.launch {
             try {
-                Log.d(TAG, "Setting up WebRTC for outgoing call to $peerId")
+                logDebug("Setting up WebRTC for outgoing call")
                 setupWebRtc(peerId)
-                Log.d(TAG, "Creating SDP offer")
+                logDebug("Creating SDP offer")
                 val sdp = webRtcEngine!!.createOffer()
-                Log.d(TAG, "Sending call_offer signal, SDP length=${sdp.length}")
+                logDebug("Sending call_offer signal")
                 sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
-                Log.d(TAG, "call_offer sent successfully")
+                logDebug("call_offer sent successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initiate call", e)
                 endCall(CallStatus.FAILED)
@@ -98,7 +99,7 @@ class CallManager @Inject constructor(
     }
 
     fun handleIncomingSignal(signal: CallSignalDto) {
-        Log.d(TAG, "Incoming signal: ${signal.signalType} from ${signal.senderId.take(8)}")
+        logDebug("Incoming signal: ${signal.signalType}")
         scope.launch {
             try {
                 when (signal.signalType) {
@@ -141,27 +142,27 @@ class CallManager @Inject constructor(
 
         scope.launch {
             try {
-                Log.d(TAG, "Accepting call from ${state.peerId.take(8)}")
+                logDebug("Accepting incoming call")
                 setupWebRtc(state.peerId)
 
                 // Decrypt the offer SDP
                 val sdpJson = decryptPayload(state.peerId, _pendingOfferPayload ?: return@launch)
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
-                Log.d(TAG, "Decoded offer SDP, length=${sdpPayload.sdp.length}")
+                logDebug("Decoded offer SDP")
 
                 // Apply pending ICE candidates after setting remote description
                 val answerSdp = webRtcEngine!!.handleRemoteOffer(sdpPayload.sdp)
-                Log.d(TAG, "Created answer SDP, length=${answerSdp.length}")
+                logDebug("Created answer SDP")
 
                 remoteDescriptionSet = true
-                Log.d(TAG, "Applying ${pendingIceCandidates.size} pending ICE candidates")
+                logDebug("Applying ${pendingIceCandidates.size} pending ICE candidates")
                 for (candidate in pendingIceCandidates) {
                     webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
                 }
                 pendingIceCandidates.clear()
 
                 sendSignal(state.peerId, "call_answer", state.callId, json.encodeToString(SdpPayload(answerSdp)))
-                Log.d(TAG, "call_answer sent")
+                logDebug("call_answer sent")
 
                 requestAudioFocus()
             } catch (e: Exception) {
@@ -274,12 +275,12 @@ class CallManager @Inject constructor(
             listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         }
 
-        Log.d(TAG, "ICE servers: ${iceServers.map { it.urls }}")
+        logDebug("ICE servers configured: ${iceServers.size}")
         webRtcEngine = WebRtcEngine(context)
         webRtcEngine?.createPeerConnection(iceServers)
 
         webRtcEngine?.onIceCandidate = { candidate ->
-            Log.d(TAG, "Local ICE candidate: ${candidate.sdp.take(60)}")
+            logDebug("Local ICE candidate generated")
             scope.launch {
                 val dto = IceCandidateDto(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
                 val state = _callState.value ?: return@launch
@@ -332,7 +333,7 @@ class CallManager @Inject constructor(
     private suspend fun ensureSessionKeys(peerId: String): SessionKeys {
         keyManager.getCachedSessionKeys(peerId)?.let { return it }
 
-        Log.d(TAG, "No cached session keys for ${peerId.take(8)}, establishing session")
+        logDebug("No cached session keys, establishing session")
         val bundle = apiService.fetchKeyBundle(peerId)
             ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
         val localKeyPair = keyManager.loadIdentityKeyPair()
@@ -399,6 +400,10 @@ class CallManager @Inject constructor(
         audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         audioManager.mode = AudioManager.MODE_NORMAL
         audioManager.isSpeakerphoneOn = false
+    }
+
+    private fun logDebug(msg: String) {
+        if (BuildConfig.DEBUG) Log.d(TAG, msg)
     }
 
     companion object {

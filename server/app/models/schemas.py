@@ -42,6 +42,7 @@ class SendMessageRequest(BaseModel):
     encrypted_body: str = Field(..., max_length=1_000_000)
     nonce: str = Field(..., max_length=65536)
     ephemeral_public_key: str = Field("", max_length=4096)
+    signature: str = Field("", max_length=512)
 
 
 class SendMessageResponse(BaseModel):
@@ -55,6 +56,7 @@ class PendingMessageResponse(BaseModel):
     encrypted_body: str
     nonce: str
     ephemeral_public_key: str = ""
+    signature: str = ""
     timestamp: int
 
 
@@ -74,7 +76,7 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.2.0"
+    version: str = "0.3.0"
 
 
 class CallSignalRequest(BaseModel):

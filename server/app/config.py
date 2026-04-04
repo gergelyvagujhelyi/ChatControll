@@ -21,9 +21,13 @@ MAX_PENDING_MESSAGES_PER_USER: int = int(
 MAX_REQUEST_BODY_BYTES: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(2 * 1024 * 1024)))  # 2 MB
 CORS_ORIGINS: list = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 WS_IDLE_TIMEOUT_SECONDS: int = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))  # 5 min
+METRICS_TOKEN: str = os.getenv("METRICS_TOKEN", "")
 TURN_ENABLED: bool = os.getenv("TURN_ENABLED", "true").lower() == "true"
 # For Android emulators, use 10.0.2.2 (host alias inside emulator).
 # For real devices, set to your server's public IP.
 TURN_RELAY_IP: str = os.getenv("TURN_RELAY_IP", "10.0.2.2")
-TURN_USERNAME: str = os.getenv("TURN_USERNAME", "chatcontroll")
-TURN_PASSWORD: str = os.getenv("TURN_PASSWORD", "chatcontroll")
+TURN_SECRET: str = os.getenv("TURN_SECRET", "")
+TURN_CREDENTIAL_TTL: int = int(os.getenv("TURN_CREDENTIAL_TTL", "3600"))
+# Legacy static credentials (deprecated — use TURN_SECRET for ephemeral creds)
+TURN_USERNAME: str = os.getenv("TURN_USERNAME", "")
+TURN_PASSWORD: str = os.getenv("TURN_PASSWORD", "")

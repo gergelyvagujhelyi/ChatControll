@@ -15,6 +15,7 @@ Protocol:
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -29,6 +30,12 @@ from app.services.websocket_manager import ws_manager
 
 router = APIRouter(tags=["websocket"])
 logger = logging.getLogger(__name__)
+
+_ALLOWED_SIGNAL_TYPES = frozenset({
+    "call_offer", "call_answer", "call_ice_candidate",
+    "call_hangup", "call_busy", "call_reject",
+})
+_MAX_CALL_OFFERS_PER_MINUTE = 10
 
 
 @router.websocket("/v1/ws")
@@ -65,7 +72,7 @@ async def websocket_endpoint(
         parts = token.split(".", 2)
         if len(parts) != 3:
             await websocket.send_text(
-                json.dumps({"type": "error", "message": "Malformed token"})
+                json.dumps({"type": "error", "message": "Authentication failed"})
             )
             await websocket.close(code=4003)
             return
@@ -79,7 +86,7 @@ async def websocket_endpoint(
         pub_key_b64 = result.scalar_one_or_none()
         if pub_key_b64 is None:
             await websocket.send_text(
-                json.dumps({"type": "error", "message": "Unknown identity"})
+                json.dumps({"type": "error", "message": "Authentication failed"})
             )
             await websocket.close(code=4003)
             return
@@ -88,7 +95,7 @@ async def websocket_endpoint(
             user_id = verify_token(token, pub_key_b64)
         except ValueError as e:
             await websocket.send_text(
-                json.dumps({"type": "error", "message": str(e)})
+                json.dumps({"type": "error", "message": "Authentication failed"})
             )
             await websocket.close(code=4003)
             return
@@ -102,6 +109,7 @@ async def websocket_endpoint(
         )
 
         # Keep alive loop — idle connections are closed after timeout
+        call_offer_times: list[float] = []
         while True:
             try:
                 raw = await asyncio.wait_for(
@@ -124,25 +132,52 @@ async def websocket_endpoint(
             if msg_type == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
 
-            elif msg_type in (
-                "call_offer",
-                "call_answer",
-                "call_ice_candidate",
-                "call_hangup",
-                "call_busy",
-                "call_reject",
-            ):
+            elif msg_type in _ALLOWED_SIGNAL_TYPES:
                 recipient_id = msg.get("recipient_id", "")
                 call_id = msg.get("call_id", "")
                 encrypted_payload = msg.get("encrypted_payload", "")
-                if recipient_id and call_id:
-                    await ws_manager.relay_call_signal(
-                        sender_id=user_id,
-                        recipient_id=recipient_id,
-                        signal_type=msg_type,
-                        call_id=call_id,
-                        encrypted_payload=encrypted_payload,
+
+                # Validate types and lengths (match REST schema constraints)
+                if (
+                    not isinstance(recipient_id, str)
+                    or not isinstance(call_id, str)
+                    or not isinstance(encrypted_payload, str)
+                    or not recipient_id
+                    or not call_id
+                    or len(recipient_id) > 64
+                    or len(call_id) > 128
+                    or len(encrypted_payload) > 65536
+                ):
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Invalid call signal"})
                     )
+                    continue
+
+                # Prevent self-calls
+                if recipient_id == user_id:
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Invalid call signal"})
+                    )
+                    continue
+
+                # Rate limit call_offer signals per connection
+                if msg_type == "call_offer":
+                    now = time.monotonic()
+                    call_offer_times = [t for t in call_offer_times if now - t < 60]
+                    if len(call_offer_times) >= _MAX_CALL_OFFERS_PER_MINUTE:
+                        await websocket.send_text(
+                            json.dumps({"type": "error", "message": "Rate limit exceeded"})
+                        )
+                        continue
+                    call_offer_times.append(now)
+
+                await ws_manager.relay_call_signal(
+                    sender_id=user_id,
+                    recipient_id=recipient_id,
+                    signal_type=msg_type,
+                    call_id=call_id,
+                    encrypted_payload=encrypted_payload,
+                )
 
     except WebSocketDisconnect:
         pass
