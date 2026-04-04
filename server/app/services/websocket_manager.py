@@ -115,6 +115,7 @@ class WebSocketManager:
         signal_type: str,
         call_id: str,
         encrypted_payload: str,
+        signature: str = "",
     ) -> bool:
         """Relay an opaque encrypted call signal to the recipient.
 
@@ -131,6 +132,7 @@ class WebSocketManager:
             "sender_id": sender_id,
             "call_id": call_id,
             "encrypted_payload": encrypted_payload,
+            "signature": signature,
         })
 
         delivered = False

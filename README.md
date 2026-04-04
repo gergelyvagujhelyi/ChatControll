@@ -152,7 +152,7 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 5. **Ed25519 authentication** — All API requests are authenticated with Ed25519 signed tokens. Message envelopes are signed by the sender and verified by the recipient.
 
-6. **Security hardening (v0.3.0)** — Protected metrics endpoint, generic auth errors, WebSocket call signal validation and rate limiting, debug logging gated behind `BuildConfig.DEBUG`, certificate pinning configuration.
+6. **Security hardening (v0.3.0–0.3.1)** — Protected metrics endpoint, generic auth errors, WebSocket call signal validation and rate limiting, debug logging gated behind `BuildConfig.DEBUG`, certificate pinning configuration, call signal Ed25519 signatures, per-challenge TURN nonce rotation (RFC 5389), ICE candidate bounds checking.
 
 ## Next Priorities
 

@@ -81,6 +81,7 @@ data class CallSignalRequest(
     val signalType: String,
     val callId: String,
     val encryptedPayload: String,
+    val signature: String = "",
 )
 
 @Serializable
@@ -94,6 +95,7 @@ data class CallSignalDto(
     val signalType: String,
     val callId: String,
     val encryptedPayload: String,
+    val signature: String = "",
 )
 
 @Serializable

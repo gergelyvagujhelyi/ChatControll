@@ -43,7 +43,7 @@ recv_key = shared_secret[32:64]
 | **Passive network observer** | Sees encrypted traffic between device and relay server | TLS 1.3, certificate pinning (config ready), encrypted payloads inside TLS |
 | **Relay server operator** | Sees encrypted envelopes, routing metadata, timing | E2E encryption means server cannot read content. Metadata minimization: no PII stored, messages deleted after ACK |
 | **Stolen/seized device** | Physical access to device storage | SQLCipher database encryption, EncryptedSharedPreferences, Android Keystore for key material, FLAG_SECURE, auto-wipe option |
-| **Quantum adversary (future)** | Harvest-now-decrypt-later of key exchanges | Hybrid key establishment with ML-KEM. **Currently mocked** — production PQC library needed |
+| **Quantum adversary (future)** | Harvest-now-decrypt-later of key exchanges | Hybrid key establishment with ML-KEM-768 (Bouncy Castle 1.79+). Production PQC active since v0.2.0 |
 | **Malicious contact** | Can send messages, attempt abuse | Share-code-based discovery limits spam. Block/report mechanisms (future). No address book exposure |
 | **App store supply chain** | Modified APK | Code signing, reproducible builds (future), ProGuard/R8 obfuscation |
 
@@ -93,8 +93,14 @@ The FCM push token is tied to the device's Google account. A sophisticated adver
 ### Message Authentication (v0.3.0+)
 Messages are signed with Ed25519 before sending. The recipient verifies the signature against the sender's stored public signing key before decryption. Messages from older clients without signatures are still accepted for backward compatibility.
 
+### Call Signal Authentication (v0.3.1+)
+Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519. The recipient verifies the signature against the sender's stored public signing key before processing. This prevents call signal injection by a compromised relay server.
+
+### Signature Verification Robustness (v0.3.1+)
+When a signed message arrives from an unknown sender, the client attempts to establish a session (fetching the sender's key bundle) before verification. If the sender cannot be resolved, the message is silently dropped. This closes a bypass where signed messages from unknown contacts could skip verification.
+
 ### Certificate Pinning
-Network security config includes placeholder for certificate pinning. Pins must be populated with the actual relay server certificate hashes before production deployment.
+Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2027-10-01 and must be rotated before expiry.
 
 ## Security Checklist
 
@@ -108,7 +114,7 @@ Network security config includes placeholder for certificate pinning. Pins must 
 - [x] No cloud backup by default
 - [x] Lock screen notification previews hidden by default
 - [x] No telemetry or third-party trackers
-- [x] Certificate pinning configuration ready
+- [x] Certificate pinning with SPKI hashes
 - [x] ProGuard/R8 enabled for release builds
 - [x] Production ML-KEM-768 library (Bouncy Castle 1.79+)
 - [x] Double Ratchet for forward secrecy
@@ -120,6 +126,10 @@ Network security config includes placeholder for certificate pinning. Pins must 
 - [x] Metrics endpoint authentication (bearer token)
 - [x] WebSocket call signal validation and rate limiting
 - [x] Debug logging gated behind BuildConfig.DEBUG
+- [x] Call signal signatures (Ed25519) — prevents signal injection
+- [x] Per-challenge TURN nonce rotation (RFC 5389 compliant)
+- [x] ICE candidate bounds (max 100 pending per call)
+- [x] Certificate pinning with real SPKI hashes
 - [ ] Ratchet state persistence (survive app restart)
 - [ ] Push proxy to break FCM linkability
 - [ ] Key rotation protocol

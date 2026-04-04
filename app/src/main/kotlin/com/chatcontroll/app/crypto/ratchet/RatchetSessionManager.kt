@@ -82,7 +82,7 @@ class RatchetSessionManager @Inject constructor(
                 pqcSecret = encapsulation.sharedSecret
                 kemCiphertext = encapsulation.ciphertext
             } catch (e: Exception) {
-                android.util.Log.w("RatchetSession", "PQC encapsulation failed, classical only: ${e.message}")
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("RatchetSession", "PQC encapsulation failed, classical only: ${e.message}")
             }
         } else if (!isInitiator && inboundKemCiphertext != null) {
             // Responder: decapsulate using our local ML-KEM decapsulation key
@@ -92,7 +92,7 @@ class RatchetSessionManager @Inject constructor(
                     pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
                 }
             } catch (e: Exception) {
-                android.util.Log.w("RatchetSession", "PQC decapsulation failed, classical only: ${e.message}")
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("RatchetSession", "PQC decapsulation failed, classical only: ${e.message}")
             }
         }
 

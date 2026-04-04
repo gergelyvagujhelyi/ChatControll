@@ -63,7 +63,7 @@ class IdentityRepositoryImpl @Inject constructor(
                     keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
                     kemKeyPair.encapsulationKey
                 } catch (e: Exception) {
-                    android.util.Log.w("Identity", "PQC key gen failed, falling back to classical: ${e.message}")
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("Identity", "PQC key gen failed, falling back to classical: ${e.message}")
                     ByteArray(0)
                 }
             }

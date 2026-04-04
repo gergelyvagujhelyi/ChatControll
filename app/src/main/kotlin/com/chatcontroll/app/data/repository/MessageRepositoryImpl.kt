@@ -204,18 +204,28 @@ class MessageRepositoryImpl @Inject constructor(
 
             // Verify sender signature if present
             if (dto.signature.isNotEmpty()) {
-                val contact = contactDao.getByUserId(dto.senderId)
-                if (contact != null) {
-                    val sigPayload = dto.senderId.toByteArray(Charsets.UTF_8) +
-                        localUserId.toByteArray(Charsets.UTF_8) +
-                        envelope.nonce + envelope.ciphertext
-                    val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
-                    val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
-                    if (!valid) {
-                        android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
-                        receivedIds.add(dto.messageId)
-                        continue
-                    }
+                // Ensure contact exists so we have the public signing key
+                var contact = contactDao.getByUserId(dto.senderId)
+                if (contact == null) {
+                    // Force session establishment to fetch and save the key bundle
+                    tryEstablishSession(dto.senderId, kemCiphertext)
+                    contact = contactDao.getByUserId(dto.senderId)
+                }
+                if (contact == null) {
+                    // Cannot verify — reject the message
+                    android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
+                    receivedIds.add(dto.messageId)
+                    continue
+                }
+                val sigPayload = dto.senderId.toByteArray(Charsets.UTF_8) +
+                    localUserId.toByteArray(Charsets.UTF_8) +
+                    envelope.nonce + envelope.ciphertext
+                val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+                val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
+                if (!valid) {
+                    android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
+                    receivedIds.add(dto.messageId)
+                    continue
                 }
             }
 

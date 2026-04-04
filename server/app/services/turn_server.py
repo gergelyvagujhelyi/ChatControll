@@ -209,13 +209,30 @@ class RelayProtocol(asyncio.DatagramProtocol):
 
 # ── Main TURN server protocol ──────────────────────────────────────
 
+_NONCE_TTL = 300  # seconds
+
+
 class TurnServerProtocol(asyncio.DatagramProtocol):
     def __init__(self, relay_ip: str):
         self.transport: Optional[asyncio.DatagramTransport] = None
         self.relay_ip = relay_ip
         self.allocations: Dict[Tuple[str, int], Allocation] = {}
         self._next_relay_port = RELAY_PORT_MIN
-        self._nonce = os.urandom(8).hex()
+        self._nonces: Dict[str, float] = {}  # nonce → expiry timestamp
+
+    def _new_nonce(self) -> str:
+        """Generate a fresh nonce and track its expiry."""
+        nonce = os.urandom(16).hex()
+        self._nonces[nonce] = time.time() + _NONCE_TTL
+        return nonce
+
+    def _validate_nonce(self, nonce: str) -> bool:
+        """Check if a nonce is known and not expired."""
+        expiry = self._nonces.get(nonce)
+        if expiry is None or time.time() > expiry:
+            self._nonces.pop(nonce, None)
+            return False
+        return True
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
@@ -223,7 +240,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         self._cleanup_task = asyncio.ensure_future(self._expire_allocations())
 
     async def _expire_allocations(self) -> None:
-        """Periodically remove expired TURN allocations."""
+        """Periodically remove expired TURN allocations and stale nonces."""
         while True:
             await asyncio.sleep(30)
             now = time.time()
@@ -232,6 +249,10 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
                 alloc = self.allocations.pop(addr)
                 alloc.transport.close()
                 logger.info("TURN allocation expired for %s:%d (relay :%d)", addr[0], addr[1], alloc.relay_port)
+            # Purge expired nonces
+            stale_nonces = [n for n, exp in self._nonces.items() if now > exp]
+            for n in stale_nonces:
+                del self._nonces[n]
 
     def connection_lost(self, exc) -> None:
         if hasattr(self, "_cleanup_task"):
@@ -295,10 +316,20 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
 
         # Check for USERNAME (auth)
         if ATTR_USERNAME not in attrs:
-            # Send 401 with REALM and NONCE
+            # Send 401 with REALM and fresh NONCE
             err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 4, 1) + b"Unauthorized")
             err += _build_attr(ATTR_REALM, REALM.encode())
-            err += _build_attr(ATTR_NONCE, self._nonce.encode())
+            err += _build_attr(ATTR_NONCE, self._new_nonce().encode())
+            msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
+            self.transport.sendto(msg, addr)
+            return
+
+        # Validate the nonce from the client's request
+        client_nonce = attrs.get(ATTR_NONCE)
+        if client_nonce is None or not self._validate_nonce(client_nonce.decode("utf-8", errors="replace")):
+            err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 4, 38) + b"Stale Nonce")
+            err += _build_attr(ATTR_REALM, REALM.encode())
+            err += _build_attr(ATTR_NONCE, self._new_nonce().encode())
             msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
             self.transport.sendto(msg, addr)
             return
@@ -307,7 +338,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         if not self._verify_message_integrity(data, attrs):
             err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 4, 1) + b"Bad credentials")
             err += _build_attr(ATTR_REALM, REALM.encode())
-            err += _build_attr(ATTR_NONCE, self._nonce.encode())
+            err += _build_attr(ATTR_NONCE, self._new_nonce().encode())
             msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
             self.transport.sendto(msg, addr)
             return
