@@ -8,6 +8,7 @@ import android.util.Base64
 import android.util.Log
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.hkdfSha256
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
@@ -103,23 +104,27 @@ class CallManager @Inject constructor(
         logDebug("Incoming signal: ${signal.signalType}")
         scope.launch {
             try {
-                // Verify signature if present
-                if (signal.signature.isNotEmpty()) {
-                    val localUserId = keyManager.getUserId() ?: return@launch
-                    val contact = contactDao.getByUserId(signal.senderId)
-                    if (contact != null) {
-                        val sigPayload = signal.senderId.toByteArray(Charsets.UTF_8) +
-                            localUserId.toByteArray(Charsets.UTF_8) +
-                            signal.signalType.toByteArray(Charsets.UTF_8) +
-                            signal.callId.toByteArray(Charsets.UTF_8) +
-                            signal.encryptedPayload.toByteArray(Charsets.UTF_8)
-                        val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
-                        val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
-                        if (!valid) {
-                            Log.w(TAG, "Call signal signature verification failed")
-                            return@launch
-                        }
-                    }
+                // Verify call signal signature (mandatory)
+                val localUserId = keyManager.getUserId() ?: return@launch
+                if (signal.signature.isEmpty()) {
+                    Log.w(TAG, "Rejecting unsigned call signal from ${signal.senderId.take(8)}")
+                    return@launch
+                }
+                val contact = contactDao.getByUserId(signal.senderId)
+                if (contact == null) {
+                    Log.w(TAG, "Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
+                    return@launch
+                }
+                val sigPayload = signal.senderId.toByteArray(Charsets.UTF_8) +
+                    localUserId.toByteArray(Charsets.UTF_8) +
+                    signal.signalType.toByteArray(Charsets.UTF_8) +
+                    signal.callId.toByteArray(Charsets.UTF_8) +
+                    signal.encryptedPayload.toByteArray(Charsets.UTF_8)
+                val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
+                val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
+                if (!valid) {
+                    Log.w(TAG, "Call signal signature verification failed")
+                    return@launch
                 }
                 when (signal.signalType) {
                     "call_offer" -> handleOffer(signal)
@@ -382,16 +387,34 @@ class CallManager @Inject constructor(
     }
 
     /**
-     * Encrypt call signals using AES-256-GCM with the static session sendKey.
-     * This intentionally bypasses the Double Ratchet to avoid advancing the
-     * message chain — call signals are ephemeral and may be lost/reordered.
+     * Derive a per-call ephemeral key from the session key and callId.
+     * This provides call-level forward secrecy: compromise of one call's
+     * key does not expose signals from other calls.
+     */
+    private fun deriveCallKey(sessionKey: ByteArray, callId: String): ByteArray {
+        return hkdfSha256(
+            ikm = sessionKey,
+            salt = callId.toByteArray(Charsets.UTF_8),
+            info = "ChatControll-call-signal".toByteArray(Charsets.UTF_8),
+            length = 32,
+        )
+    }
+
+    /**
+     * Encrypt call signals using AES-256-GCM with a per-call ephemeral key
+     * derived from the session key and callId. This bypasses the Double Ratchet
+     * to avoid advancing the message chain — call signals are ephemeral and
+     * may be lost/reordered.
      */
     private suspend fun encryptPayload(peerId: String, plaintext: String): String {
         val sessionKeys = ensureSessionKeys(peerId)
+        val callId = _callState.value?.callId ?: throw IllegalStateException("No active call")
+        val callKey = deriveCallKey(sessionKeys.sendKey, callId)
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeys.sendKey, "AES"), GCMParameterSpec(128, nonce))
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
         val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        callKey.fill(0)
         val nonceB64 = Base64.encodeToString(nonce, Base64.NO_WRAP)
         val ctB64 = Base64.encodeToString(ciphertext, Base64.NO_WRAP)
         return "$nonceB64.$ctB64"
@@ -400,13 +423,17 @@ class CallManager @Inject constructor(
     private suspend fun decryptPayload(peerId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
         val sessionKeys = ensureSessionKeys(peerId)
+        val callId = _callState.value?.callId ?: throw IllegalStateException("No active call")
+        val callKey = deriveCallKey(sessionKeys.receiveKey, callId)
         require(encrypted.contains('.')) { "Invalid encrypted payload format" }
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sessionKeys.receiveKey, "AES"), GCMParameterSpec(128, nonce))
-        return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
+        val result = String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        callKey.fill(0)
+        return result
     }
 
     private fun requestAudioFocus() {

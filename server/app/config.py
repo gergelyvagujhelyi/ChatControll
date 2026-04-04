@@ -31,3 +31,9 @@ TURN_CREDENTIAL_TTL: int = int(os.getenv("TURN_CREDENTIAL_TTL", "3600"))
 # Legacy static credentials (deprecated — use TURN_SECRET for ephemeral creds)
 TURN_USERNAME: str = os.getenv("TURN_USERNAME", "")
 TURN_PASSWORD: str = os.getenv("TURN_PASSWORD", "")
+# Comma-separated list of trusted proxy IPs that may set X-Forwarded-For
+TRUSTED_PROXIES: set = {
+    ip.strip()
+    for ip in os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1").split(",")
+    if ip.strip()
+}

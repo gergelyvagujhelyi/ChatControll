@@ -240,7 +240,7 @@ class RatchetSessionManager @Inject constructor(
             receivingChainIndex = state.receivingChainKey?.index ?: 0,
             previousSendingChainLength = state.previousSendingChainLength,
             skippedKeys = state.skippedMessageKeys.map { (k, v) ->
-                SkippedKeyEntry(k.first, k.second, v.b64())
+                SkippedKeyEntry(k.first, k.second, v.b64(), state.skippedKeyTimestamps[k] ?: System.currentTimeMillis())
             },
             pendingKemCiphertext = state.pendingKemCiphertext?.b64(),
             pqcEstablished = state.pqcEstablished,
@@ -261,6 +261,9 @@ class RatchetSessionManager @Inject constructor(
                 previousSendingChainLength = dto.previousSendingChainLength,
                 skippedMessageKeys = dto.skippedKeys.associate {
                     (it.publicKeyHex to it.messageNumber) to it.key.fromB64()
+                }.toMutableMap(),
+                skippedKeyTimestamps = dto.skippedKeys.associate {
+                    (it.publicKeyHex to it.messageNumber) to it.timestamp
                 }.toMutableMap(),
                 pendingKemCiphertext = dto.pendingKemCiphertext?.fromB64(),
                 pqcEstablished = dto.pqcEstablished,
@@ -301,6 +304,7 @@ private data class SkippedKeyEntry(
     val publicKeyHex: String,
     val messageNumber: Int,
     val key: String,
+    val timestamp: Long = System.currentTimeMillis(),
 )
 
 private fun ByteArray.b64(): String = Base64.encodeToString(this, Base64.NO_WRAP)

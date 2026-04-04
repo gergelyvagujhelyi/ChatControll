@@ -110,10 +110,10 @@ class DoubleRatchet(
         val senderPublicKey = Base64.decode(header.publicKey, Base64.NO_WRAP)
 
         // Check if this message key was previously skipped
-        val skippedKey = state.skippedMessageKeys.remove(
-            senderPublicKey.toHex() to header.messageNumber
-        )
+        val skippedMapKey = senderPublicKey.toHex() to header.messageNumber
+        val skippedKey = state.skippedMessageKeys.remove(skippedMapKey)
         if (skippedKey != null) {
+            state.skippedKeyTimestamps.remove(skippedMapKey)
             val plaintext = aesGcmDecrypt(skippedKey, ciphertext)
             skippedKey.fill(0)
             return plaintext
@@ -169,10 +169,20 @@ class DoubleRatchet(
             throw SecurityException("Too many skipped messages (possible attack)")
         }
 
+        // Purge expired skipped keys before adding new ones
+        val now = System.currentTimeMillis()
+        val expired = state.skippedKeyTimestamps.filter { now - it.value > RatchetState.SKIPPED_KEY_TTL_MS }.keys
+        for (key in expired) {
+            state.skippedMessageKeys.remove(key)?.fill(0)
+            state.skippedKeyTimestamps.remove(key)
+        }
+
         var current = chainKey
         while (current.index < until) {
             val remoteKeyHex = state.remoteDhPublicKey?.toHex() ?: break
-            state.skippedMessageKeys[remoteKeyHex to current.index] = current.messageKey()
+            val mapKey = remoteKeyHex to current.index
+            state.skippedMessageKeys[mapKey] = current.messageKey()
+            state.skippedKeyTimestamps[mapKey] = now
             current = current.next()
         }
         state.receivingChainKey = current

@@ -36,6 +36,7 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
     "call_hangup", "call_busy", "call_reject",
 })
 _MAX_CALL_OFFERS_PER_MINUTE = 10
+_MAX_SIGNALS_PER_MINUTE = 100
 
 
 @router.websocket("/v1/ws")
@@ -110,6 +111,7 @@ async def websocket_endpoint(
 
         # Keep alive loop — idle connections are closed after timeout
         call_offer_times: list[float] = []
+        signal_times: list[float] = []
         while True:
             try:
                 raw = await asyncio.wait_for(
@@ -162,6 +164,16 @@ async def websocket_endpoint(
                         json.dumps({"type": "error", "message": "Invalid call signal"})
                     )
                     continue
+
+                # Global per-connection signal rate limit
+                now_sig = time.monotonic()
+                signal_times = [t for t in signal_times if now_sig - t < 60]
+                if len(signal_times) >= _MAX_SIGNALS_PER_MINUTE:
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Rate limit exceeded"})
+                    )
+                    continue
+                signal_times.append(now_sig)
 
                 # Rate limit call_offer signals per connection
                 if msg_type == "call_offer":

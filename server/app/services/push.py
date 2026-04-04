@@ -82,8 +82,6 @@ async def send_push_notification(
         message = messaging.Message(
             data={
                 "type": "new_message",
-                "senderId": sender_id,
-                "conversationId": conversation_id,
             },
             token=fcm_token,
             android=messaging.AndroidConfig(

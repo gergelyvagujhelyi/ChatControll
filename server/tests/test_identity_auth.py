@@ -82,12 +82,17 @@ async def test_rotate_keys(client: AsyncClient):
     new_private_key, new_pub_key_b64 = generate_ed25519_keypair()
     new_id_key = base64.b64encode(b"new_identity_key_pad!").decode()
 
+    # Sign the new public key with the new private key (proof of possession)
+    proof_sig = new_private_key.sign(new_pub_key_b64.encode("utf-8"))
+    proof_b64 = base64.b64encode(proof_sig).decode()
+
     # Rotate — authenticated with the OLD key
     resp = await client.put(
         "/v1/identity/me/keys",
         json={
             "public_signing_key": new_pub_key_b64,
             "public_identity_key": new_id_key,
+            "new_key_proof": proof_b64,
         },
         headers=_auth(user),
     )
@@ -112,11 +117,15 @@ async def test_rotate_keys_updates_key_bundle(client: AsyncClient):
     new_private_key, new_pub_key_b64 = generate_ed25519_keypair()
     new_id_key = base64.b64encode(b"rotated_id_key_pad!!").decode()
 
+    proof_sig = new_private_key.sign(new_pub_key_b64.encode("utf-8"))
+    proof_b64 = base64.b64encode(proof_sig).decode()
+
     await client.put(
         "/v1/identity/me/keys",
         json={
             "public_signing_key": new_pub_key_b64,
             "public_identity_key": new_id_key,
+            "new_key_proof": proof_b64,
         },
         headers=_auth(user),
     )

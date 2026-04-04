@@ -10,6 +10,8 @@ data class ContactEntity(
     val publicIdentityKey: ByteArray,
     val publicSigningKey: ByteArray,
     val verified: Boolean = false,
+    val pqcEstablished: Boolean = false,
+    val signatureRequired: Boolean = true,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

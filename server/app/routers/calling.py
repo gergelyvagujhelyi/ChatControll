@@ -14,7 +14,7 @@ from app.models.schemas import (
     IceServer,
     IceServersResponse,
 )
-from app.config import TURN_CREDENTIAL_TTL, TURN_PASSWORD, TURN_SECRET, TURN_USERNAME
+from app.config import TURN_CREDENTIAL_TTL, TURN_SECRET
 from app.services.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/v1/calls", tags=["calling"])
@@ -56,20 +56,15 @@ async def get_ice_servers(
     ]
 
     relay_ip = getattr(request.app.state, "turn_relay_ip", None)
-    if relay_ip:
-        if TURN_SECRET:
-            # Ephemeral credentials (coturn --use-auth-secret compatible)
-            expiry = int(time.time()) + TURN_CREDENTIAL_TTL
-            username = f"{expiry}:{user_id}"
-            credential = base64.b64encode(
-                hmac.new(
-                    TURN_SECRET.encode(), username.encode(), hashlib.sha1
-                ).digest()
-            ).decode()
-        else:
-            # Legacy static credentials (development only)
-            username = TURN_USERNAME
-            credential = TURN_PASSWORD
+    if relay_ip and TURN_SECRET:
+        # Ephemeral credentials (coturn --use-auth-secret compatible)
+        expiry = int(time.time()) + TURN_CREDENTIAL_TTL
+        username = f"{expiry}:{user_id}"
+        credential = base64.b64encode(
+            hmac.new(
+                TURN_SECRET.encode(), username.encode(), hashlib.sha1
+            ).digest()
+        ).decode()
 
         servers.append(
             IceServer(

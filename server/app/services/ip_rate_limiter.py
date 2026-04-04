@@ -18,6 +18,8 @@ from typing import NamedTuple
 
 from fastapi import HTTPException, Request
 
+from app.config import TRUSTED_PROXIES
+
 IP_RATE_LIMIT = int(os.getenv("IP_RATE_LIMIT", "30"))
 IP_RATE_WINDOW = 60  # seconds
 
@@ -34,11 +36,13 @@ _CLEANUP_INTERVAL = 300  # purge stale entries every 5 min
 
 
 def _client_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For from a trusted proxy."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Extract client IP, honoring X-Forwarded-For only from trusted proxies."""
+    direct_ip = request.client.host if request.client else "unknown"
+    if direct_ip in TRUSTED_PROXIES:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return direct_ip
 
 
 async def check_ip_rate_limit(request: Request) -> None:

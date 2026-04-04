@@ -18,6 +18,9 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from app.config import METRICS_TOKEN
 
 
+_MAX_METRIC_KEYS = 10_000
+
+
 class Metrics:
     def __init__(self) -> None:
         self._lock = Lock()
@@ -29,6 +32,8 @@ class Metrics:
     def record(self, method: str, path: str, status: int, duration: float) -> None:
         key = f'{method} {path}'
         with self._lock:
+            if key not in self._request_count and len(self._request_count) >= _MAX_METRIC_KEYS:
+                return  # Cap cardinality — drop new keys
             self._request_count[key] += 1
             self._latency_sum[key] += duration
             if status >= 400:
@@ -78,10 +83,14 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         for prefix in ("/v1/identity/", "/v1/messages/", "/v1/calls/", "/v1/push/"):
             if path.startswith(prefix):
-                # Keep the first segment after prefix, strip IDs
                 rest = path[len(prefix):]
-                if "/" in rest:
+                if rest.startswith("resolve/"):
+                    path = prefix + "resolve/{code}"
+                elif "/" in rest:
                     path = prefix + "{id}" + rest[rest.index("/"):]
+                elif rest not in ("bootstrap", "me", "send", "pending", "ack",
+                                  "register", "signal", "ice-servers", "me/keys"):
+                    path = prefix + "{id}"
                 break
 
         metrics.record(request.method, path, response.status_code, duration)

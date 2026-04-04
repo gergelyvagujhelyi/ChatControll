@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_ENABLED, TURN_RELAY_IP
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_ENABLED, TURN_RELAY_IP, TURN_SECRET
 from sqlalchemy import text
 
 from app.database import async_session, engine
@@ -77,12 +77,18 @@ async def lifespan(app: FastAPI):
 
     turn_transport = None
     if TURN_ENABLED:
-        from app.services.turn_server import start_turn_server
-        try:
-            turn_transport = await start_turn_server(relay_ip=TURN_RELAY_IP)
-            app.state.turn_relay_ip = TURN_RELAY_IP
-        except Exception as e:
-            logging.getLogger(__name__).warning("TURN server failed to start: %s", e)
+        if not TURN_SECRET:
+            logging.getLogger(__name__).error(
+                "TURN_ENABLED=true but TURN_SECRET is not set. "
+                "Set TURN_SECRET or disable TURN with TURN_ENABLED=false."
+            )
+        else:
+            from app.services.turn_server import start_turn_server
+            try:
+                turn_transport = await start_turn_server(relay_ip=TURN_RELAY_IP)
+                app.state.turn_relay_ip = TURN_RELAY_IP
+            except Exception as e:
+                logging.getLogger(__name__).warning("TURN server failed to start: %s", e)
 
     yield
 
@@ -103,12 +109,21 @@ app = FastAPI(
 )
 
 class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject HTTP requests whose Content-Length exceeds the configured limit."""
+    """Reject HTTP requests whose body exceeds the configured limit.
+
+    Checks Content-Length header when present, then also verifies the
+    actual body size for chunked/streamed requests.
+    """
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
             return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        # For chunked requests (no Content-Length), check actual body size
+        if not content_length and request.method in ("POST", "PUT", "PATCH"):
+            body = await request.body()
+            if len(body) > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
         return await call_next(request)
 
 

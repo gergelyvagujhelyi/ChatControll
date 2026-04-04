@@ -202,6 +202,14 @@ class MessageRepositoryImpl @Inject constructor(
                 nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
             )
 
+            // Check if signature is required for this contact
+            val senderContact = contactDao.getByUserId(dto.senderId)
+            if (dto.signature.isEmpty() && senderContact?.signatureRequired == true) {
+                android.util.Log.w("MessageRepo", "Rejecting unsigned message from signature-required contact ${dto.senderId.take(8)}")
+                receivedIds.add(dto.messageId)
+                continue
+            }
+
             // Verify sender signature if present
             if (dto.signature.isNotEmpty()) {
                 // Ensure contact exists so we have the public signing key
@@ -312,14 +320,24 @@ class MessageRepositoryImpl @Inject constructor(
             )
             keyManager.cacheSessionKeys(remoteUserId, sessionKeys)
 
-            // Save as contact
-            if (contactDao.getByUserId(remoteUserId) == null) {
+            // Save as contact and track PQC status
+            val existingContact = contactDao.getByUserId(remoteUserId)
+            if (existingContact == null) {
                 contactDao.upsert(ContactEntity(
                     userId = remoteUserId,
                     displayName = remoteUserId.take(8),
                     publicIdentityKey = pubIdKey,
                     publicSigningKey = pubSignKey,
+                    pqcEstablished = sessionKeys.pqcEstablished,
                 ))
+            } else if (existingContact.pqcEstablished && !sessionKeys.pqcEstablished) {
+                // PQC downgrade detected — warn but allow (could be temporary)
+                android.util.Log.w("MessageRepo",
+                    "PQC DOWNGRADE for ${remoteUserId.take(8)}: " +
+                    "session was hybrid PQ, now classical only")
+            } else if (sessionKeys.pqcEstablished && !existingContact.pqcEstablished) {
+                // Upgrade to PQC — update the contact record
+                contactDao.upsert(existingContact.copy(pqcEstablished = true))
             }
 
             sessionKeys
