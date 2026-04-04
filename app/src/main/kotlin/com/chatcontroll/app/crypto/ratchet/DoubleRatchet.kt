@@ -3,6 +3,8 @@ package com.chatcontroll.app.crypto.ratchet
 import android.util.Base64
 import com.chatcontroll.app.crypto.ClassicalKeyAgreement
 import com.chatcontroll.app.crypto.hkdfSha256
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -29,6 +31,7 @@ class DoubleRatchet(
     private val classicalKeyAgreement: ClassicalKeyAgreement,
 ) {
     private val secureRandom = SecureRandom()
+    private val json = Json { ignoreUnknownKeys = true }
 
     /**
      * Initialize a ratchet session as the initiator (Alice).
@@ -92,7 +95,9 @@ class DoubleRatchet(
             messageNumber = chainKey.index,
         )
 
-        val ciphertext = aesGcmEncrypt(messageKey, plaintext)
+        // Include header as AAD to prevent tampering (per Signal spec)
+        val headerBytes = json.encodeToString(header).toByteArray(Charsets.UTF_8)
+        val ciphertext = aesGcmEncrypt(messageKey, plaintext, headerBytes)
 
         // Advance the sending chain
         state.sendingChainKey = nextChain
@@ -114,7 +119,8 @@ class DoubleRatchet(
         val skippedKey = state.skippedMessageKeys.remove(skippedMapKey)
         if (skippedKey != null) {
             state.skippedKeyTimestamps.remove(skippedMapKey)
-            val plaintext = aesGcmDecrypt(skippedKey, ciphertext)
+            val skippedHeaderBytes = json.encodeToString(header).toByteArray(Charsets.UTF_8)
+            val plaintext = aesGcmDecrypt(skippedKey, ciphertext, skippedHeaderBytes)
             skippedKey.fill(0)
             return plaintext
         }
@@ -140,7 +146,9 @@ class DoubleRatchet(
         val messageKey = chainKey.messageKey()
         state.receivingChainKey = chainKey.next()
 
-        val plaintext = aesGcmDecrypt(messageKey, ciphertext)
+        // Include header as AAD to verify integrity (per Signal spec)
+        val headerBytes = json.encodeToString(header).toByteArray(Charsets.UTF_8)
+        val plaintext = aesGcmDecrypt(messageKey, ciphertext, headerBytes)
         messageKey.fill(0)
         return plaintext
     }
@@ -151,14 +159,23 @@ class DoubleRatchet(
 
         // Derive new receiving chain
         val dhReceive = classicalKeyAgreement.agree(state.dhKeyPair.privateKey, newRemotePublicKey)
-        val (rootKey1, receivingChainKey) = kdfRootKey(state.rootKey, dhReceive)
+        val oldRootKey = state.rootKey
+        val (rootKey1, receivingChainKey) = kdfRootKey(oldRootKey, dhReceive)
+        oldRootKey.fill(0)
+        dhReceive.fill(0)
         state.rootKey = rootKey1
         state.receivingChainKey = ChainKey(receivingChainKey, 0)
 
-        // Generate new DH keypair and derive new sending chain
+        // Zeroize old DH private key before replacing
+        val oldPrivateKey = state.dhKeyPair.privateKey
         state.dhKeyPair = generateDhKeyPair()
+        oldPrivateKey.fill(0)
+
         val dhSend = classicalKeyAgreement.agree(state.dhKeyPair.privateKey, newRemotePublicKey)
-        val (rootKey2, sendingChainKey) = kdfRootKey(state.rootKey, dhSend)
+        val oldRootKey2 = state.rootKey
+        val (rootKey2, sendingChainKey) = kdfRootKey(oldRootKey2, dhSend)
+        oldRootKey2.fill(0)
+        dhSend.fill(0)
         state.rootKey = rootKey2
         state.sendingChainKey = ChainKey(sendingChainKey, 0)
     }
@@ -204,7 +221,7 @@ class DoubleRatchet(
         return DhKeyPair(publicKey = pub, privateKey = priv)
     }
 
-    private fun aesGcmEncrypt(key: ByteArray, plaintext: ByteArray): ByteArray {
+    private fun aesGcmEncrypt(key: ByteArray, plaintext: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray {
         val nonce = ByteArray(12).also { secureRandom.nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(
@@ -212,12 +229,13 @@ class DoubleRatchet(
             SecretKeySpec(key, "AES"),
             GCMParameterSpec(128, nonce),
         )
+        if (aad.isNotEmpty()) cipher.updateAAD(aad)
         val ct = cipher.doFinal(plaintext)
         // Prepend nonce to ciphertext
         return nonce + ct
     }
 
-    private fun aesGcmDecrypt(key: ByteArray, nonceAndCiphertext: ByteArray): ByteArray {
+    private fun aesGcmDecrypt(key: ByteArray, nonceAndCiphertext: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray {
         val nonce = nonceAndCiphertext.copyOfRange(0, 12)
         val ct = nonceAndCiphertext.copyOfRange(12, nonceAndCiphertext.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -226,6 +244,7 @@ class DoubleRatchet(
             SecretKeySpec(key, "AES"),
             GCMParameterSpec(128, nonce),
         )
+        if (aad.isNotEmpty()) cipher.updateAAD(aad)
         return cipher.doFinal(ct)
     }
 }

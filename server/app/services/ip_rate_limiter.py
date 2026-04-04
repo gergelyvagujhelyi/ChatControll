@@ -29,6 +29,7 @@ class _Bucket(NamedTuple):
     window_start: float
 
 
+_MAX_BUCKETS = 100_000
 _buckets: dict[str, _Bucket] = defaultdict(lambda: _Bucket(0, time.monotonic()))
 _lock = asyncio.Lock()
 _last_cleanup = time.monotonic()
@@ -58,6 +59,14 @@ async def check_ip_rate_limit(request: Request) -> None:
             for k in stale:
                 del _buckets[k]
             _last_cleanup = now
+
+        # Cap dictionary size to prevent memory exhaustion
+        if len(_buckets) >= _MAX_BUCKETS and ip not in _buckets:
+            stale = [k for k, v in _buckets.items() if now - v.window_start > IP_RATE_WINDOW]
+            for k in stale:
+                del _buckets[k]
+            if len(_buckets) >= _MAX_BUCKETS:
+                raise HTTPException(status_code=429, detail="Too many requests")
 
         bucket = _buckets[ip]
         if now - bucket.window_start > IP_RATE_WINDOW:

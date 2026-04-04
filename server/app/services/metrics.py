@@ -39,6 +39,11 @@ class Metrics:
             if status >= 400:
                 self._request_errors[key] += 1
 
+    @staticmethod
+    def _escape_label(value: str) -> str:
+        """Escape a Prometheus label value (backslash, double-quote, newline)."""
+        return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
     def expose(self) -> str:
         lines = []
         with self._lock:
@@ -46,19 +51,19 @@ class Metrics:
             lines.append("# TYPE http_requests_total counter")
             for key, count in sorted(self._request_count.items()):
                 method, path = key.split(" ", 1)
-                lines.append(f'http_requests_total{{method="{method}",path="{path}"}} {count}')
+                lines.append(f'http_requests_total{{method="{self._escape_label(method)}",path="{self._escape_label(path)}"}} {count}')
 
             lines.append("# HELP http_request_errors_total HTTP requests with 4xx/5xx status")
             lines.append("# TYPE http_request_errors_total counter")
             for key, count in sorted(self._request_errors.items()):
                 method, path = key.split(" ", 1)
-                lines.append(f'http_request_errors_total{{method="{method}",path="{path}"}} {count}')
+                lines.append(f'http_request_errors_total{{method="{self._escape_label(method)}",path="{self._escape_label(path)}"}} {count}')
 
             lines.append("# HELP http_request_duration_seconds_sum Total request processing time")
             lines.append("# TYPE http_request_duration_seconds_sum counter")
             for key, total in sorted(self._latency_sum.items()):
                 method, path = key.split(" ", 1)
-                lines.append(f'http_request_duration_seconds_sum{{method="{method}",path="{path}"}} {total:.6f}')
+                lines.append(f'http_request_duration_seconds_sum{{method="{self._escape_label(method)}",path="{self._escape_label(path)}"}} {total:.6f}')
 
             lines.append("# HELP ws_active_connections Current WebSocket connections")
             lines.append("# TYPE ws_active_connections gauge")

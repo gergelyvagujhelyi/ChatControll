@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import time
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -24,6 +25,9 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
     "call_hangup", "call_busy", "call_reject",
 })
 
+_MAX_SIGNALS_PER_MINUTE = 100
+_signal_times: dict[str, list[float]] = defaultdict(list)
+
 
 @router.post("/signal", response_model=CallSignalResponse)
 async def relay_signal(
@@ -34,6 +38,14 @@ async def relay_signal(
         raise HTTPException(status_code=400, detail="Invalid signal type")
     if request.recipient_id == x_user_id:
         raise HTTPException(status_code=400, detail="Cannot signal self")
+
+    # Per-user rate limit
+    now = time.monotonic()
+    times = _signal_times[x_user_id]
+    times[:] = [t for t in times if now - t < 60]
+    if len(times) >= _MAX_SIGNALS_PER_MINUTE:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    times.append(now)
     delivered = await ws_manager.relay_call_signal(
         sender_id=x_user_id,
         recipient_id=request.recipient_id,

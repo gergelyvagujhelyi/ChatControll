@@ -56,7 +56,7 @@ ATTR_SOFTWARE = 0x8022
 ATTR_FINGERPRINT = 0x8028
 
 # Config (loaded from environment via app.config)
-from app.config import TURN_PASSWORD, TURN_SECRET, TURN_USERNAME
+from app.config import TURN_SECRET
 REALM = "chatcontroll"
 TURN_LIFETIME = 600
 RELAY_PORT_MIN = 49152
@@ -79,13 +79,6 @@ def _ephemeral_password(username: str) -> str:
     mac = hmac.new(TURN_SECRET.encode(), username.encode(), hashlib.sha1).digest()
     return base64.b64encode(mac).decode()
 
-
-# Pre-compute static HMAC key only if using legacy static credentials
-HMAC_KEY: Optional[bytes] = (
-    _long_term_key(TURN_USERNAME, REALM, TURN_PASSWORD)
-    if TURN_USERNAME and TURN_PASSWORD
-    else None
-)
 
 
 # ── STUN message helpers ────────────────────────────────────────────
@@ -123,7 +116,7 @@ def _build_attr(attr_type: int, value: bytes) -> bytes:
 
 def _build_msg(msg_type: int, txn_id: bytes, attrs: bytes, add_integrity: bool = True, hmac_key: Optional[bytes] = None) -> bytes:
     if add_integrity:
-        key = hmac_key or HMAC_KEY
+        key = hmac_key
         if key is None:
             add_integrity = False
     if add_integrity:
@@ -514,29 +507,27 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
     def _get_hmac_key(self, attrs: Dict[int, bytes]) -> Optional[bytes]:
         """Derive the HMAC key for MESSAGE-INTEGRITY verification.
 
-        Supports both ephemeral credentials (TURN_SECRET) and legacy
-        static credentials (TURN_USERNAME/TURN_PASSWORD).
+        Only supports ephemeral credentials (TURN_SECRET).
         """
         if ATTR_USERNAME not in attrs:
-            return HMAC_KEY
+            return None
 
         username = attrs[ATTR_USERNAME].decode("utf-8", errors="replace")
 
-        if TURN_SECRET and ":" in username:
-            # Ephemeral mode: username = "<expiry>:<user_id>"
-            try:
-                expiry_str = username.split(":")[0]
-                expiry = int(expiry_str)
-            except ValueError:
-                return None
-            if time.time() > expiry:
-                logger.debug("Ephemeral TURN credential expired for %s", username)
-                return None
-            password = _ephemeral_password(username)
-            return _long_term_key(username, REALM, password)
+        if not TURN_SECRET or ":" not in username:
+            return None
 
-        # Legacy static credentials
-        return HMAC_KEY
+        # Ephemeral mode: username = "<expiry>:<user_id>"
+        try:
+            expiry_str = username.split(":")[0]
+            expiry = int(expiry_str)
+        except ValueError:
+            return None
+        if time.time() > expiry:
+            logger.debug("Ephemeral TURN credential expired for %s", username)
+            return None
+        password = _ephemeral_password(username)
+        return _long_term_key(username, REALM, password)
 
     def _verify_message_integrity(self, data: bytes, attrs: Dict[int, bytes]) -> bool:
         """Verify the MESSAGE-INTEGRITY attribute."""

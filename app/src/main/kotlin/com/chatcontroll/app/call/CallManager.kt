@@ -71,6 +71,8 @@ class CallManager @Inject constructor(
 
     private val pendingIceCandidates = mutableListOf<IceCandidateDto>()
     private var remoteDescriptionSet = false
+    /** Track seen signal signatures to reject replays within the same call. */
+    private val seenSignalSignatures = mutableSetOf<String>()
 
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
@@ -124,6 +126,11 @@ class CallManager @Inject constructor(
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
                     Log.w(TAG, "Call signal signature verification failed")
+                    return@launch
+                }
+                // Reject replayed signals (same signature = same signal)
+                if (!seenSignalSignatures.add(signal.signature)) {
+                    logDebug("Rejecting replayed call signal")
                     return@launch
                 }
                 when (signal.signalType) {
@@ -267,6 +274,7 @@ class CallManager @Inject constructor(
         webRtcEngine = null
         _pendingOfferPayload = null
         pendingIceCandidates.clear()
+        seenSignalSignatures.clear()
         remoteDescriptionSet = false
         abandonAudioFocus()
 

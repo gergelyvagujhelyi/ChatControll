@@ -60,15 +60,13 @@ async def _clear_stale_token(recipient_id: str) -> None:
 
 async def send_push_notification(
     fcm_token: str,
-    sender_id: str,
-    conversation_id: str,
     recipient_id: Optional[str] = None,
 ) -> bool:
     """Send a wake-up push to a device.
 
-    The payload contains only the sender ID and a conversation hint —
-    never any message content. The client fetches the encrypted envelope
-    from the /v1/messages/pending endpoint.
+    The payload contains only a generic signal — never any message content
+    or sender identity. The client fetches the encrypted envelope from the
+    /v1/messages/pending endpoint.
 
     If the FCM token is invalid/expired, it is automatically cleared from
     the database so future sends fall back to polling.

@@ -117,8 +117,13 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
-            return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        if content_length:
+            try:
+                cl = int(content_length)
+            except (ValueError, TypeError):
+                return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+            if cl < 0 or cl > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
         # For chunked requests (no Content-Length), check actual body size
         if not content_length and request.method in ("POST", "PUT", "PATCH"):
             body = await request.body()
