@@ -14,6 +14,9 @@ import com.chatcontroll.app.data.remote.dto.CallSignalRequest
 import com.chatcontroll.app.domain.model.CallDirection
 import com.chatcontroll.app.domain.model.CallState
 import com.chatcontroll.app.domain.model.CallStatus
+import com.chatcontroll.app.domain.repository.CryptoEngine
+import com.chatcontroll.app.domain.repository.PublicKeyBundle
+import com.chatcontroll.app.domain.repository.SessionKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -42,6 +45,7 @@ class CallManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val apiService: ApiService,
     private val keyManager: KeyManager,
+    private val cryptoEngine: CryptoEngine,
     private val webSocketClient: WebSocketClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -322,13 +326,40 @@ class CallManager @Inject constructor(
     }
 
     /**
+     * Ensure session keys exist for [peerId], establishing a new session if
+     * the in-memory cache is empty (e.g. after app restart).
+     */
+    private suspend fun ensureSessionKeys(peerId: String): SessionKeys {
+        keyManager.getCachedSessionKeys(peerId)?.let { return it }
+
+        Log.d(TAG, "No cached session keys for ${peerId.take(8)}, establishing session")
+        val bundle = apiService.fetchKeyBundle(peerId)
+            ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
+        val localKeyPair = keyManager.loadIdentityKeyPair()
+            ?: throw IllegalStateException("No local identity key pair")
+
+        val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+        val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+
+        val sessionKeys = cryptoEngine.establishSession(
+            localIdentity = localKeyPair,
+            remotePublicBundle = PublicKeyBundle(
+                publicSigningKey = pubSignKey,
+                publicIdentityKey = pubIdKey,
+                pqcEncapsulationKey = ByteArray(0),
+            ),
+        )
+        keyManager.cacheSessionKeys(peerId, sessionKeys)
+        return sessionKeys
+    }
+
+    /**
      * Encrypt call signals using AES-256-GCM with the static session sendKey.
      * This intentionally bypasses the Double Ratchet to avoid advancing the
      * message chain — call signals are ephemeral and may be lost/reordered.
      */
-    private fun encryptPayload(peerId: String, plaintext: String): String {
-        val sessionKeys = keyManager.getCachedSessionKeys(peerId)
-            ?: throw IllegalStateException("No session keys for $peerId — cannot encrypt call signal")
+    private suspend fun encryptPayload(peerId: String, plaintext: String): String {
+        val sessionKeys = ensureSessionKeys(peerId)
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeys.sendKey, "AES"), GCMParameterSpec(128, nonce))
@@ -338,10 +369,9 @@ class CallManager @Inject constructor(
         return "$nonceB64.$ctB64"
     }
 
-    private fun decryptPayload(peerId: String, encrypted: String): String {
+    private suspend fun decryptPayload(peerId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
-        val sessionKeys = keyManager.getCachedSessionKeys(peerId)
-            ?: throw IllegalStateException("No session keys for $peerId — cannot decrypt call signal")
+        val sessionKeys = ensureSessionKeys(peerId)
         require(encrypted.contains('.')) { "Invalid encrypted payload format" }
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
