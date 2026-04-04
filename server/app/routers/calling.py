@@ -31,7 +31,10 @@ async def relay_signal(
 
 
 @router.get("/ice-servers", response_model=IceServersResponse)
-async def get_ice_servers(request: Request) -> IceServersResponse:
+async def get_ice_servers(
+    request: Request,
+    _user_id: str = Depends(verify_auth_token),
+) -> IceServersResponse:
     """Return ICE server configuration for WebRTC calls."""
     servers = [
         IceServer(urls="stun:stun.l.google.com:19302"),

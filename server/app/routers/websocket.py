@@ -5,7 +5,8 @@ new messages are available. Message content is never sent over WebSocket —
 only a signal to fetch from the REST API.
 
 Protocol:
-- Client sends: {"type": "auth", "user_id": "..."}
+- Client sends: {"type": "auth", "token": "<user_id>.<ts_ms>.<sig_b64>"}
+- Server sends: {"type": "auth_ok"} on success
 - Server sends: {"type": "new_message", "sender_id": "..."}
 - Client sends: {"type": "ping"} periodically
 - Server sends: {"type": "pong"}
@@ -18,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
-from app.auth import _verify_token
+from app.auth import verify_token
 from app.database import async_session
 from app.models.db import Identity
 from app.services.websocket_manager import ws_manager
@@ -79,7 +80,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 return
 
         try:
-            user_id = _verify_token(token, pub_key_b64)
+            user_id = verify_token(token, pub_key_b64)
         except ValueError as e:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": str(e)})

@@ -38,6 +38,8 @@ async def check_rate_limit(db: AsyncSession, user_id: str) -> bool:
             rate = result.scalar_one_or_none()
             if rate is None:
                 return True  # Shouldn't happen, but allow the request
+            if rate.message_count >= MAX_MESSAGES_PER_MINUTE:
+                return False
             rate.message_count += 1
             await db.flush()
         return True

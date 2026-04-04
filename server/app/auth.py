@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 
 
-def _verify_token(token: str, public_key_b64: str) -> str:
+def verify_token(token: str, public_key_b64: str) -> str:
     """Verify an auth token and return the user_id.
 
     Raises ``ValueError`` on any verification failure.
@@ -53,13 +53,13 @@ def _verify_token(token: str, public_key_b64: str) -> str:
         raise ValueError("Token expired or clock skew too large")
 
     # --- signature verification ---
+    pub_bytes = base64.b64decode(public_key_b64)
     try:
-        pub_bytes = base64.b64decode(public_key_b64)
-        public_key = Ed25519PublicKey.from_public_raw_key(pub_bytes)
+        # Raw 32-byte Ed25519 public key (Android KeyManager export format)
+        public_key = Ed25519PublicKey.from_public_bytes(pub_bytes)
     except Exception:
-        # The stored key may be in SPKI/DER format (Java default export)
+        # Fallback: the stored key may be in SPKI/DER format (Java default export)
         try:
-            pub_bytes = base64.b64decode(public_key_b64)
             from cryptography.hazmat.primitives.serialization import (
                 load_der_public_key,
             )
@@ -113,7 +113,7 @@ async def verify_auth_token(
         raise HTTPException(status_code=401, detail="Unknown identity")
 
     try:
-        verified_user_id = _verify_token(token, public_key_b64)
+        verified_user_id = verify_token(token, public_key_b64)
     except ValueError as e:
         logger.debug("Auth token rejected for %s: %s", claimed_user_id[:8], e)
         raise HTTPException(status_code=401, detail=str(e))
