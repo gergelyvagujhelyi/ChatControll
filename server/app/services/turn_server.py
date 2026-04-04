@@ -7,6 +7,7 @@ NOT for production use — no TLS, basic auth, minimal validation.
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
@@ -55,7 +56,7 @@ ATTR_SOFTWARE = 0x8022
 ATTR_FINGERPRINT = 0x8028
 
 # Config (loaded from environment via app.config)
-from app.config import TURN_USERNAME, TURN_PASSWORD
+from app.config import TURN_PASSWORD, TURN_SECRET, TURN_USERNAME
 REALM = "chatcontroll"
 TURN_LIFETIME = 600
 RELAY_PORT_MIN = 49152
@@ -67,7 +68,22 @@ def _long_term_key(username: str, realm: str, password: str) -> bytes:
     return hashlib.md5(f"{username}:{realm}:{password}".encode()).digest()
 
 
-HMAC_KEY = _long_term_key(TURN_USERNAME, REALM, TURN_PASSWORD)
+def _ephemeral_password(username: str) -> str:
+    """Compute the ephemeral TURN password for the given username.
+
+    coturn --use-auth-secret mode: password = base64(HMAC-SHA1(secret, username))
+    where username = "<expiry_timestamp>:<user_id>".
+    """
+    mac = hmac.new(TURN_SECRET.encode(), username.encode(), hashlib.sha1).digest()
+    return base64.b64encode(mac).decode()
+
+
+# Pre-compute static HMAC key only if using legacy static credentials
+HMAC_KEY: Optional[bytes] = (
+    _long_term_key(TURN_USERNAME, REALM, TURN_PASSWORD)
+    if TURN_USERNAME and TURN_PASSWORD
+    else None
+)
 
 
 # ── STUN message helpers ────────────────────────────────────────────
@@ -103,12 +119,16 @@ def _build_attr(attr_type: int, value: bytes) -> bytes:
     return struct.pack("!HH", attr_type, len(value)) + value + b"\x00" * padding
 
 
-def _build_msg(msg_type: int, txn_id: bytes, attrs: bytes, add_integrity: bool = True) -> bytes:
+def _build_msg(msg_type: int, txn_id: bytes, attrs: bytes, add_integrity: bool = True, hmac_key: Optional[bytes] = None) -> bytes:
+    if add_integrity:
+        key = hmac_key or HMAC_KEY
+        if key is None:
+            add_integrity = False
     if add_integrity:
         # Build message up to MESSAGE-INTEGRITY to compute HMAC
         pre_len = len(attrs) + 4 + 20  # +4 attr header +20 HMAC
         header = struct.pack("!HHI", msg_type, pre_len, MAGIC_COOKIE) + txn_id
-        mac = hmac.new(HMAC_KEY, header + attrs, hashlib.sha1).digest()
+        mac = hmac.new(key, header + attrs, hashlib.sha1).digest()
         attrs += _build_attr(ATTR_MESSAGE_INTEGRITY, mac)
 
     header = struct.pack("!HHI", msg_type, len(attrs), MAGIC_COOKIE) + txn_id
@@ -144,11 +164,13 @@ class Allocation:
         relay_port: int,
         transport: asyncio.DatagramTransport,
         server: "TurnServerProtocol",
+        hmac_key: Optional[bytes] = None,
     ):
         self.client_addr = client_addr
         self.relay_port = relay_port
         self.transport = transport
         self.server = server
+        self.hmac_key = hmac_key
         self.expires = time.time() + TURN_LIFETIME
         self.permissions: set = set()  # set of permitted peer IPs
         self.channels: Dict[int, Tuple[str, int]] = {}  # channel_number → (ip, port)
@@ -267,7 +289,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
                                      _xor_address(self.relay_ip, alloc.relay_port, txn_id))
             resp_attrs += _build_attr(ATTR_XOR_MAPPED_ADDRESS, _xor_address(addr[0], addr[1], txn_id))
             resp_attrs += _build_attr(ATTR_LIFETIME, struct.pack("!I", TURN_LIFETIME))
-            msg = _build_msg(ALLOCATE_RESPONSE, txn_id, resp_attrs)
+            msg = _build_msg(ALLOCATE_RESPONSE, txn_id, resp_attrs, hmac_key=alloc.hmac_key)
             self.transport.sendto(msg, addr)
             return
 
@@ -290,10 +312,13 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             self.transport.sendto(msg, addr)
             return
 
-        # Allocate a relay port
-        asyncio.ensure_future(self._do_allocate(txn_id, addr))
+        # Derive the HMAC key used for this allocation's responses
+        alloc_hmac_key = self._get_hmac_key(attrs)
 
-    async def _do_allocate(self, txn_id: bytes, addr: Tuple[str, int]) -> None:
+        # Allocate a relay port
+        asyncio.ensure_future(self._do_allocate(txn_id, addr, alloc_hmac_key))
+
+    async def _do_allocate(self, txn_id: bytes, addr: Tuple[str, int], alloc_hmac_key: Optional[bytes] = None) -> None:
         max_attempts = RELAY_PORT_MAX - RELAY_PORT_MIN + 1
         alloc = None
 
@@ -303,7 +328,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             if self._next_relay_port > RELAY_PORT_MAX:
                 self._next_relay_port = RELAY_PORT_MIN
 
-            alloc = Allocation(addr, relay_port, None, self)  # type: ignore
+            alloc = Allocation(addr, relay_port, None, self, hmac_key=alloc_hmac_key)  # type: ignore
 
             try:
                 loop = asyncio.get_running_loop()
@@ -332,7 +357,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
                                  _xor_address(self.relay_ip, relay_port, txn_id))
         resp_attrs += _build_attr(ATTR_XOR_MAPPED_ADDRESS, _xor_address(addr[0], addr[1], txn_id))
         resp_attrs += _build_attr(ATTR_LIFETIME, struct.pack("!I", TURN_LIFETIME))
-        msg = _build_msg(ALLOCATE_RESPONSE, txn_id, resp_attrs)
+        msg = _build_msg(ALLOCATE_RESPONSE, txn_id, resp_attrs, hmac_key=alloc_hmac_key)
         self.transport.sendto(msg, addr)
 
     def _handle_refresh(self, txn_id: bytes, attrs: Dict[int, bytes], addr: Tuple[str, int]) -> None:
@@ -407,10 +432,42 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         logger.info("Send indication: %s:%d → %s:%d (%d bytes)", addr[0], addr[1], peer_ip, peer_port, len(attrs[ATTR_DATA]))
         alloc.transport.sendto(attrs[ATTR_DATA], (peer_ip, peer_port))
 
+    def _get_hmac_key(self, attrs: Dict[int, bytes]) -> Optional[bytes]:
+        """Derive the HMAC key for MESSAGE-INTEGRITY verification.
+
+        Supports both ephemeral credentials (TURN_SECRET) and legacy
+        static credentials (TURN_USERNAME/TURN_PASSWORD).
+        """
+        if ATTR_USERNAME not in attrs:
+            return HMAC_KEY
+
+        username = attrs[ATTR_USERNAME].decode("utf-8", errors="replace")
+
+        if TURN_SECRET and ":" in username:
+            # Ephemeral mode: username = "<expiry>:<user_id>"
+            try:
+                expiry_str = username.split(":")[0]
+                expiry = int(expiry_str)
+            except ValueError:
+                return None
+            if time.time() > expiry:
+                logger.debug("Ephemeral TURN credential expired for %s", username)
+                return None
+            password = _ephemeral_password(username)
+            return _long_term_key(username, REALM, password)
+
+        # Legacy static credentials
+        return HMAC_KEY
+
     def _verify_message_integrity(self, data: bytes, attrs: Dict[int, bytes]) -> bool:
-        """Verify the MESSAGE-INTEGRITY attribute using the long-term HMAC key."""
+        """Verify the MESSAGE-INTEGRITY attribute."""
         if ATTR_MESSAGE_INTEGRITY not in attrs:
             return False
+
+        hmac_key = self._get_hmac_key(attrs)
+        if hmac_key is None:
+            return False
+
         received_mac = attrs[ATTR_MESSAGE_INTEGRITY]
         # Find where MESSAGE-INTEGRITY attribute starts in the raw data
         offset = HEADER_SIZE
@@ -425,7 +482,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         mi_len = offset - HEADER_SIZE + 4 + 20  # attr header (4) + HMAC (20)
         modified = bytearray(data[:offset])
         struct.pack_into("!H", modified, 2, mi_len)
-        expected_mac = hmac.new(HMAC_KEY, bytes(modified), hashlib.sha1).digest()
+        expected_mac = hmac.new(hmac_key, bytes(modified), hashlib.sha1).digest()
         return hmac.compare_digest(expected_mac, received_mac)
 
     def _handle_channel_data(self, data: bytes, addr: Tuple[str, int]) -> None:

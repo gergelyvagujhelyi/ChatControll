@@ -38,3 +38,7 @@
 # WebRTC - native JNI callbacks require all classes to remain unobfuscated
 -keep class org.webrtc.** { *; }
 -dontwarn org.webrtc.**
+
+# jni_zero - required by WebRTC native library (JNI_OnLoad references org.jni_zero.JniInit)
+-keep class org.jni_zero.** { *; }
+-dontwarn org.jni_zero.**

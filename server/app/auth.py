@@ -91,14 +91,14 @@ async def verify_auth_token(
     Expected header: ``Authorization: Bearer <user_id>.<ts>.<sig>``
     """
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Bearer token")
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
     token = authorization[7:]  # strip "Bearer "
 
     # Extract user_id from the token *before* DB lookup
     parts = token.split(".", 2)
     if len(parts) != 3:
-        raise HTTPException(status_code=401, detail="Malformed auth token")
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
     claimed_user_id = parts[0]
 
@@ -110,12 +110,12 @@ async def verify_auth_token(
     )
     public_key_b64 = result.scalar_one_or_none()
     if public_key_b64 is None:
-        raise HTTPException(status_code=401, detail="Unknown identity")
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
     try:
         verified_user_id = verify_token(token, public_key_b64)
     except ValueError as e:
         logger.debug("Auth token rejected for %s: %s", claimed_user_id[:8], e)
-        raise HTTPException(status_code=401, detail=str(e))
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
     return verified_user_id
