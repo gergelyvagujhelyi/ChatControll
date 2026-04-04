@@ -36,8 +36,9 @@ data class RatchetState(
 ) {
     companion object {
         /** Maximum number of skipped message keys to store per chain.
-         *  Prevents memory exhaustion from a malicious peer claiming high message numbers. */
-        const val MAX_SKIP = 64
+         *  Limits memory from a malicious peer claiming high message numbers,
+         *  while tolerating legitimate reorder storms on flaky networks. */
+        const val MAX_SKIP = 256
         /** Skipped message keys older than this are purged (7 days). */
         const val SKIPPED_KEY_TTL_MS = 7L * 24 * 60 * 60 * 1000
     }

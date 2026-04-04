@@ -71,9 +71,9 @@ class CallManager @Inject constructor(
 
     private val pendingIceCandidates = mutableListOf<IceCandidateDto>()
     private var remoteDescriptionSet = false
-    /** Track seen signal signatures to reject replays within the same call. */
-    private val seenSignalSignatures = mutableSetOf<String>()
-
+    /** Track seen signal signatures with timestamps to reject replays.
+     *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS]. */
+    private val seenSignalSignatures = LinkedHashMap<String, Long>()
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
 
@@ -129,9 +129,20 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 // Reject replayed signals (same signature = same signal)
-                if (!seenSignalSignatures.add(signal.signature)) {
+                val now = System.currentTimeMillis()
+                // Evict expired entries
+                val iter = seenSignalSignatures.iterator()
+                while (iter.hasNext()) {
+                    if (now - iter.next().value > SIGNATURE_TTL_MS) iter.remove() else break
+                }
+                if (seenSignalSignatures.containsKey(signal.signature)) {
                     logDebug("Rejecting replayed call signal")
                     return@launch
+                }
+                seenSignalSignatures[signal.signature] = now
+                // Cap size as a safety bound
+                while (seenSignalSignatures.size > MAX_SEEN_SIGNATURES) {
+                    seenSignalSignatures.remove(seenSignalSignatures.keys.first())
                 }
                 when (signal.signalType) {
                     "call_offer" -> handleOffer(signal)
@@ -154,7 +165,6 @@ class CallManager @Inject constructor(
             return
         }
 
-        _pendingOfferPayload = signal.encryptedPayload
         val displayName = signal.senderId.take(8)
         _callState.value = CallState(
             callId = signal.callId,
@@ -163,6 +173,7 @@ class CallManager @Inject constructor(
             direction = CallDirection.INCOMING,
             status = CallStatus.RINGING,
         )
+        _pendingOfferPayload = signal.encryptedPayload
     }
 
     fun acceptCall() {
@@ -177,7 +188,7 @@ class CallManager @Inject constructor(
                 setupWebRtc(state.peerId)
 
                 // Decrypt the offer SDP
-                val sdpJson = decryptPayload(state.peerId, _pendingOfferPayload ?: return@launch)
+                val sdpJson = decryptPayload(state.peerId, state.callId, _pendingOfferPayload ?: return@launch)
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
                 logDebug("Decoded offer SDP")
 
@@ -239,7 +250,7 @@ class CallManager @Inject constructor(
         val state = _callState.value ?: return
         _callState.value = state.copy(status = CallStatus.CONNECTING)
 
-        val sdpJson = decryptPayload(signal.senderId, signal.encryptedPayload)
+        val sdpJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
         webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
 
@@ -254,7 +265,7 @@ class CallManager @Inject constructor(
     }
 
     private suspend fun handleIceCandidate(signal: CallSignalDto) {
-        val candidateJson = decryptPayload(signal.senderId, signal.encryptedPayload)
+        val candidateJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
         if (webRtcEngine != null && remoteDescriptionSet) {
@@ -274,7 +285,6 @@ class CallManager @Inject constructor(
         webRtcEngine = null
         _pendingOfferPayload = null
         pendingIceCandidates.clear()
-        seenSignalSignatures.clear()
         remoteDescriptionSet = false
         abandonAudioFocus()
 
@@ -428,10 +438,9 @@ class CallManager @Inject constructor(
         return "$nonceB64.$ctB64"
     }
 
-    private suspend fun decryptPayload(peerId: String, encrypted: String): String {
+    private suspend fun decryptPayload(peerId: String, callId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
         val sessionKeys = ensureSessionKeys(peerId)
-        val callId = _callState.value?.callId ?: throw IllegalStateException("No active call")
         val callKey = deriveCallKey(sessionKeys.receiveKey, callId)
         require(encrypted.contains('.')) { "Invalid encrypted payload format" }
         val parts = encrypted.split('.', limit = 2)
@@ -471,6 +480,8 @@ class CallManager @Inject constructor(
     companion object {
         private const val TAG = "CallManager"
         private const val MAX_PENDING_ICE_CANDIDATES = 100
+        private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
+        private const val MAX_SEEN_SIGNATURES = 500
     }
 }
 

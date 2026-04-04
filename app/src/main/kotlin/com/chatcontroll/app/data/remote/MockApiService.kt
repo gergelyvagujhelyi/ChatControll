@@ -116,6 +116,27 @@ class MockApiService @Inject constructor() : ApiService {
         return com.chatcontroll.app.data.remote.dto.IceServersResponse(iceServers = emptyList())
     }
 
+    override suspend fun rotateKeys(request: com.chatcontroll.app.data.remote.dto.KeyRotationRequest): com.chatcontroll.app.data.remote.dto.KeyRotationResponse = mutex.withLock {
+        val userId = currentUserId ?: throw IllegalStateException("Not bootstrapped")
+        val newShareCode = deriveShareCode(request.publicIdentityKey)
+
+        // Remove old share code
+        val oldBundle = keyBundles[userId]
+        if (oldBundle != null) {
+            shareCodes.entries.removeAll { it.value == userId }
+        }
+
+        keyBundles[userId] = KeyBundleDto(
+            userId = userId,
+            publicSigningKey = request.publicSigningKey,
+            publicIdentityKey = request.publicIdentityKey,
+            pqcEncapsulationKey = request.pqcEncapsulationKey ?: "",
+        )
+        shareCodes[newShareCode] = userId
+
+        com.chatcontroll.app.data.remote.dto.KeyRotationResponse(status = "ok", shareCode = newShareCode)
+    }
+
     private fun deriveShareCode(publicIdentityKeyBase64: String): String {
         val keyBytes = Base64.decode(publicIdentityKeyBase64, Base64.NO_WRAP)
         val hash = MessageDigest.getInstance("SHA-256").digest(keyBytes)

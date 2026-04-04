@@ -6,6 +6,7 @@ import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.entity.ContactEntity
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.dto.BootstrapRequest
+import com.chatcontroll.app.data.remote.dto.KeyRotationRequest
 import com.chatcontroll.app.domain.model.Contact
 import com.chatcontroll.app.domain.model.Identity
 import com.chatcontroll.app.crypto.PqcProvider
@@ -165,8 +166,58 @@ class IdentityRepositoryImpl @Inject constructor(
     }
 
     override suspend fun publishKeyBundle() {
-        // Key bundle is published during bootstrap. Re-publication for key rotation
-        // would go here in a future version.
+        // Generate fresh identity keys
+        val newKeyPair = cryptoEngine.generateIdentity()
+
+        // Generate fresh PQC keys if current identity has them
+        val currentPqcEk = keyManager.getPqcEncapsulationKey()
+        val newPqcEk = if (currentPqcEk != null && currentPqcEk.isNotEmpty()) {
+            try {
+                val kemKeyPair = pqcProvider.generateKemKeyPair()
+                kemKeyPair
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+
+        // Base64-encode the new public keys
+        val newSignB64 = Base64.encodeToString(newKeyPair.publicSigningKey, Base64.NO_WRAP)
+        val newIdB64 = Base64.encodeToString(newKeyPair.publicIdentityKey, Base64.NO_WRAP)
+        val newPqcB64 = newPqcEk?.let {
+            Base64.encodeToString(it.encapsulationKey, Base64.NO_WRAP)
+        }
+
+        // Proof of possession: sign the new public_signing_key B64 string
+        // with the NEW private signing key (server verifies with new public key)
+        val proofData = newSignB64.toByteArray(Charsets.UTF_8)
+        val kf = java.security.KeyFactory.getInstance("Ed25519", "BC")
+        val newPrivKey = kf.generatePrivate(
+            java.security.spec.PKCS8EncodedKeySpec(newKeyPair.privateSigningKey)
+        )
+        val sig = java.security.Signature.getInstance("Ed25519", "BC")
+        sig.initSign(newPrivKey)
+        sig.update(proofData)
+        val proofB64 = Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
+
+        // Call server (authenticated with the CURRENT signing key via authToken)
+        val response = apiService.rotateKeys(
+            KeyRotationRequest(
+                publicSigningKey = newSignB64,
+                publicIdentityKey = newIdB64,
+                pqcEncapsulationKey = newPqcB64,
+                newKeyProof = proofB64,
+            )
+        )
+
+        // Server accepted — persist new keys locally
+        keyManager.storeIdentityKeyPair(newKeyPair)
+        if (newPqcEk != null) {
+            keyManager.storePqcKeys(newPqcEk.encapsulationKey, newPqcEk.decapsulationKey)
+        }
+        keyManager.storeShareCode(response.shareCode)
+
+        // Invalidate all session caches — peers will re-establish on next message
+        keyManager.clearSessionCache()
     }
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {
