@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BootstrapRequest(BaseModel):
@@ -53,7 +53,7 @@ class PendingMessageResponse(BaseModel):
 
 
 class AckRequest(BaseModel):
-    message_ids: List[str]
+    message_ids: List[str] = Field(..., max_length=1000)
 
 
 class PushTokenRequest(BaseModel):

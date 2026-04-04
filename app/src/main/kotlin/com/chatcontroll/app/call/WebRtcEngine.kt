@@ -152,10 +152,6 @@ class WebRtcEngine(context: Context) {
         peerConnection = null
         localAudioTrack = null
         audioSource = null
-    }
-
-    fun shutdown() {
-        dispose()
         factory.dispose()
         eglBase.release()
     }

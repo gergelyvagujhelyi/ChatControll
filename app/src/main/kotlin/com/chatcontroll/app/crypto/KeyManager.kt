@@ -7,6 +7,7 @@ import com.chatcontroll.app.domain.repository.KeyPair
 import com.chatcontroll.app.domain.repository.SessionKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.Signature
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,7 +37,7 @@ class KeyManager @Inject constructor(
         )
     }
 
-    private val sessionCache = mutableMapOf<String, SessionKeys>()
+    private val sessionCache = ConcurrentHashMap<String, SessionKeys>()
 
     fun hasIdentity(): Boolean {
         return encryptedPrefs.contains(KEY_PUBLIC_SIGNING)
@@ -138,6 +139,18 @@ class KeyManager @Inject constructor(
         return sig.sign()
     }
 
+    fun saveRatchetState(sessionId: String, serialized: String) {
+        encryptedPrefs.edit().putString(RATCHET_PREFIX + sessionId, serialized).apply()
+    }
+
+    fun loadRatchetState(sessionId: String): String? {
+        return encryptedPrefs.getString(RATCHET_PREFIX + sessionId, null)
+    }
+
+    fun removeRatchetState(sessionId: String) {
+        encryptedPrefs.edit().remove(RATCHET_PREFIX + sessionId).apply()
+    }
+
     fun wipeAll() {
         encryptedPrefs.edit().clear().apply()
         sessionCache.clear()
@@ -155,6 +168,7 @@ class KeyManager @Inject constructor(
         private const val KEY_PQC_ENCAPSULATION = "pqc_ek"
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
         private const val PQC_PREFIX = "pqc_session_"
+        private const val RATCHET_PREFIX = "ratchet_"
     }
 }
 

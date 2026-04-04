@@ -112,14 +112,24 @@ class MessageRepositoryImpl @Inject constructor(
 
     override suspend fun retryFailed(messageId: String) {
         val entity = messageDao.getById(messageId) ?: return
+        val plaintext = entity.plaintext ?: return // Cannot retry without plaintext
         messageDao.updateState(messageId, MessageState.SENDING.name)
 
         try {
+            // Re-encrypt with current ratchet state instead of sending stale ciphertext
+            var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
+            if (sessionKeys == null) {
+                sessionKeys = tryEstablishSession(entity.recipientId)
+                    ?: throw IllegalStateException("No session for retry")
+            }
+
+            val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
+
             val response = apiService.sendMessage(
                 SendMessageRequest(
                     recipientId = entity.recipientId,
-                    encryptedBody = Base64.encodeToString(entity.encryptedBody, Base64.NO_WRAP),
-                    nonce = Base64.encodeToString(entity.nonce, Base64.NO_WRAP),
+                    encryptedBody = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP),
+                    nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
                 )
             )
             messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)

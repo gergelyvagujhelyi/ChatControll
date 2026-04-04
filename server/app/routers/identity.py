@@ -106,6 +106,9 @@ async def resolve_share_code(
 
 def _derive_share_code(public_identity_key_b64: str) -> str:
     """Derive a short, URL-safe share code from the public identity key."""
-    key_bytes = base64.b64decode(public_identity_key_b64)
+    try:
+        key_bytes = base64.b64decode(public_identity_key_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 public_identity_key")
     digest = hashlib.sha256(key_bytes).digest()
     return base64.urlsafe_b64encode(digest[:12]).decode().rstrip("=")

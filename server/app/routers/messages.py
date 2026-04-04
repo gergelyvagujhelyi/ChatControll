@@ -44,9 +44,23 @@ async def send_message(
 
     The server never inspects or logs the encrypted body.
     """
+    # Verify sender is a registered identity
+    sender_result = await db.execute(
+        select(Identity).where(Identity.user_id == x_user_id)
+    )
+    if sender_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Unknown sender identity")
+
     # Rate limiting
     if not await check_rate_limit(db, x_user_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Verify recipient exists
+    recipient_check = await db.execute(
+        select(Identity).where(Identity.user_id == request.recipient_id)
+    )
+    if recipient_check.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Recipient not found")
 
     # Check pending queue depth
     count_result = await db.execute(
@@ -61,7 +75,7 @@ async def send_message(
         )
 
     message_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     timestamp_ms = int(now.timestamp() * 1000)
 
     pending = PendingMessage(

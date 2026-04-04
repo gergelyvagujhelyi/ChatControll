@@ -1,6 +1,7 @@
 package com.chatcontroll.app.crypto.ratchet
 
 import android.util.Base64
+import android.util.Log
 import com.chatcontroll.app.crypto.ClassicalKeyAgreement
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.PqcProvider
@@ -12,6 +13,7 @@ import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
@@ -133,7 +135,10 @@ class RatchetSessionManager @Inject constructor(
             pqcEstablished = pqcSecret.isNotEmpty(),
         )
 
-        sessionsMutex.withLock { sessions[sessionId] = state }
+        sessionsMutex.withLock {
+            sessions[sessionId] = state
+            persistSession(sessionId, state)
+        }
 
         return SessionKeys(
             sendKey = if (isInitiator) chainA else chainB,
@@ -145,7 +150,7 @@ class RatchetSessionManager @Inject constructor(
 
     override suspend fun encrypt(sessionKeys: SessionKeys, plaintext: ByteArray): EncryptedEnvelope {
         return sessionsMutex.withLock {
-            val state = sessions[sessionKeys.sessionId]
+            val state = getOrLoadSession(sessionKeys.sessionId)
                 ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
             val (header, ciphertext) = ratchet.encrypt(state, plaintext)
@@ -161,6 +166,8 @@ class RatchetSessionManager @Inject constructor(
 
             val headerJson = json.encodeToString(finalHeader)
 
+            persistSession(sessionKeys.sessionId, state)
+
             EncryptedEnvelope(
                 ciphertext = ciphertext,
                 nonce = headerJson.toByteArray(Charsets.UTF_8),
@@ -171,13 +178,15 @@ class RatchetSessionManager @Inject constructor(
 
     override suspend fun decrypt(sessionKeys: SessionKeys, envelope: EncryptedEnvelope): ByteArray {
         return sessionsMutex.withLock {
-            val state = sessions[sessionKeys.sessionId]
+            val state = getOrLoadSession(sessionKeys.sessionId)
                 ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
             val headerJson = String(envelope.nonce, Charsets.UTF_8)
             val header = json.decodeFromString<RatchetHeader>(headerJson)
 
-            ratchet.decrypt(state, header, envelope.ciphertext)
+            val plaintext = ratchet.decrypt(state, header, envelope.ciphertext)
+            persistSession(sessionKeys.sessionId, state)
+            plaintext
         }
     }
 
@@ -197,7 +206,90 @@ class RatchetSessionManager @Inject constructor(
         val hash = MessageDigest.getInstance("SHA-256").digest(publicIdentityKey)
         return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP)
     }
+
+    // ── Session persistence ──────────────────────────────────────────
+
+    private fun persistSession(sessionId: String, state: RatchetState) {
+        try {
+            val dto = SerializableRatchetState(
+                dhPublicKey = state.dhKeyPair.publicKey.b64(),
+                dhPrivateKey = state.dhKeyPair.privateKey.b64(),
+                remoteDhPublicKey = state.remoteDhPublicKey?.b64(),
+                rootKey = state.rootKey.b64(),
+                sendingChainKey = state.sendingChainKey?.key?.b64(),
+                sendingChainIndex = state.sendingChainKey?.index ?: 0,
+                receivingChainKey = state.receivingChainKey?.key?.b64(),
+                receivingChainIndex = state.receivingChainKey?.index ?: 0,
+                previousSendingChainLength = state.previousSendingChainLength,
+                skippedKeys = state.skippedMessageKeys.map { (k, v) ->
+                    SkippedKeyEntry(k.first, k.second, v.b64())
+                },
+                pendingKemCiphertext = state.pendingKemCiphertext?.b64(),
+                pqcEstablished = state.pqcEstablished,
+            )
+            keyManager.saveRatchetState(sessionId, json.encodeToString(dto))
+        } catch (e: Exception) {
+            Log.w("RatchetSession", "Failed to persist session $sessionId: ${e.message}")
+        }
+    }
+
+    private fun loadPersistedSession(sessionId: String): RatchetState? {
+        val serialized = keyManager.loadRatchetState(sessionId) ?: return null
+        return try {
+            val dto = json.decodeFromString<SerializableRatchetState>(serialized)
+            RatchetState(
+                dhKeyPair = DhKeyPair(dto.dhPublicKey.fromB64(), dto.dhPrivateKey.fromB64()),
+                remoteDhPublicKey = dto.remoteDhPublicKey?.fromB64(),
+                rootKey = dto.rootKey.fromB64(),
+                sendingChainKey = dto.sendingChainKey?.let { ChainKey(it.fromB64(), dto.sendingChainIndex) },
+                receivingChainKey = dto.receivingChainKey?.let { ChainKey(it.fromB64(), dto.receivingChainIndex) },
+                previousSendingChainLength = dto.previousSendingChainLength,
+                skippedMessageKeys = dto.skippedKeys.associate {
+                    (it.publicKeyHex to it.messageNumber) to it.key.fromB64()
+                }.toMutableMap(),
+                pendingKemCiphertext = dto.pendingKemCiphertext?.fromB64(),
+                pqcEstablished = dto.pqcEstablished,
+            )
+        } catch (e: Exception) {
+            Log.w("RatchetSession", "Failed to load session $sessionId: ${e.message}")
+            keyManager.removeRatchetState(sessionId)
+            null
+        }
+    }
+
+    private fun getOrLoadSession(sessionId: String): RatchetState? {
+        sessions[sessionId]?.let { return it }
+        val loaded = loadPersistedSession(sessionId) ?: return null
+        sessions[sessionId] = loaded
+        return loaded
+    }
 }
+
+@Serializable
+private data class SerializableRatchetState(
+    val dhPublicKey: String,
+    val dhPrivateKey: String,
+    val remoteDhPublicKey: String?,
+    val rootKey: String,
+    val sendingChainKey: String?,
+    val sendingChainIndex: Int,
+    val receivingChainKey: String?,
+    val receivingChainIndex: Int,
+    val previousSendingChainLength: Int,
+    val skippedKeys: List<SkippedKeyEntry>,
+    val pendingKemCiphertext: String?,
+    val pqcEstablished: Boolean,
+)
+
+@Serializable
+private data class SkippedKeyEntry(
+    val publicKeyHex: String,
+    val messageNumber: Int,
+    val key: String,
+)
+
+private fun ByteArray.b64(): String = Base64.encodeToString(this, Base64.NO_WRAP)
+private fun String.fromB64(): ByteArray = Base64.decode(this, Base64.NO_WRAP)
 
 private fun sha256Hex(data: ByteArray): String {
     return MessageDigest.getInstance("SHA-256")

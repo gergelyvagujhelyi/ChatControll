@@ -22,7 +22,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -178,17 +180,21 @@ class CallManager @Inject constructor(
     }
 
     fun toggleMute() {
-        val state = _callState.value ?: return
-        val newMuted = !state.isMuted
-        webRtcEngine?.setMicEnabled(!newMuted)
-        _callState.value = state.copy(isMuted = newMuted)
+        _callState.update { state ->
+            if (state == null) return
+            val newMuted = !state.isMuted
+            webRtcEngine?.setMicEnabled(!newMuted)
+            state.copy(isMuted = newMuted)
+        }
     }
 
     fun toggleSpeaker() {
-        val state = _callState.value ?: return
-        val newSpeaker = !state.isSpeakerOn
-        audioManager.isSpeakerphoneOn = newSpeaker
-        _callState.value = state.copy(isSpeakerOn = newSpeaker)
+        _callState.update { state ->
+            if (state == null) return
+            val newSpeaker = !state.isSpeakerOn
+            audioManager.isSpeakerphoneOn = newSpeaker
+            state.copy(isSpeakerOn = newSpeaker)
+        }
     }
 
     private var _pendingOfferPayload: String? = null
@@ -214,7 +220,8 @@ class CallManager @Inject constructor(
         val candidateJson = decryptPayload(signal.senderId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
-        if (webRtcEngine?.let { true } == true && _callState.value?.status != CallStatus.RINGING) {
+        val status = _callState.value?.status
+        if (webRtcEngine != null && status != CallStatus.RINGING && status != CallStatus.CONNECTING) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
         } else {
             pendingIceCandidates.add(candidate)
@@ -227,11 +234,18 @@ class CallManager @Inject constructor(
 
     private fun endCall(status: CallStatus) {
         _callState.value = _callState.value?.copy(status = status)
-        webRtcEngine?.dispose()
+        val engine = webRtcEngine
         webRtcEngine = null
         _pendingOfferPayload = null
         pendingIceCandidates.clear()
         abandonAudioFocus()
+
+        // Dispose WebRTC resources off the main thread to avoid ANR
+        if (engine != null) {
+            scope.launch(Dispatchers.Default) {
+                engine.dispose()
+            }
+        }
 
         // Clear state after a short delay so UI can show the end status
         scope.launch {
@@ -269,14 +283,15 @@ class CallManager @Inject constructor(
         }
 
         webRtcEngine?.onConnectionStateChange = lambda@{ iceState ->
-            val state = _callState.value ?: return@lambda
             when (iceState) {
                 PeerConnection.IceConnectionState.CONNECTED,
                 PeerConnection.IceConnectionState.COMPLETED -> {
-                    _callState.value = state.copy(
-                        status = CallStatus.CONNECTED,
-                        connectedAt = System.currentTimeMillis(),
-                    )
+                    _callState.update { state ->
+                        state?.copy(
+                            status = CallStatus.CONNECTED,
+                            connectedAt = System.currentTimeMillis(),
+                        )
+                    }
                 }
                 PeerConnection.IceConnectionState.FAILED -> {
                     endCall(CallStatus.FAILED)

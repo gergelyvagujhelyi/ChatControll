@@ -214,6 +214,11 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
     def connection_lost(self, exc) -> None:
         if hasattr(self, "_cleanup_task"):
             self._cleanup_task.cancel()
+        # Clean up all relay transports
+        for alloc_addr, alloc in list(self.allocations.items()):
+            if alloc.transport:
+                alloc.transport.close()
+        self.allocations.clear()
 
     def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
         if len(data) < 4:
@@ -237,7 +242,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             if msg_type == BINDING_REQUEST:
                 self._handle_binding(txn_id, addr)
             elif msg_type == ALLOCATE_REQUEST:
-                self._handle_allocate(txn_id, attrs, addr)
+                self._handle_allocate(data, txn_id, attrs, addr)
             elif msg_type == REFRESH_REQUEST:
                 self._handle_refresh(txn_id, attrs, addr)
             elif msg_type == CREATE_PERM_REQUEST:
@@ -254,7 +259,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         msg = _build_msg(BINDING_RESPONSE, txn_id, attrs, add_integrity=False)
         self.transport.sendto(msg, addr)
 
-    def _handle_allocate(self, txn_id: bytes, attrs: Dict[int, bytes], addr: Tuple[str, int]) -> None:
+    def _handle_allocate(self, data: bytes, txn_id: bytes, attrs: Dict[int, bytes], addr: Tuple[str, int]) -> None:
         # Check if already allocated
         if addr in self.allocations:
             alloc = self.allocations[addr]
@@ -289,23 +294,32 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         asyncio.ensure_future(self._do_allocate(txn_id, addr))
 
     async def _do_allocate(self, txn_id: bytes, addr: Tuple[str, int]) -> None:
-        relay_port = self._next_relay_port
-        self._next_relay_port += 1
-        if self._next_relay_port > RELAY_PORT_MAX:
-            self._next_relay_port = RELAY_PORT_MIN
+        max_attempts = RELAY_PORT_MAX - RELAY_PORT_MIN + 1
+        alloc = None
 
-        # Create a placeholder allocation first
-        alloc = Allocation(addr, relay_port, None, self)  # type: ignore
+        for _ in range(max_attempts):
+            relay_port = self._next_relay_port
+            self._next_relay_port += 1
+            if self._next_relay_port > RELAY_PORT_MAX:
+                self._next_relay_port = RELAY_PORT_MIN
 
-        try:
-            loop = asyncio.get_running_loop()
-            transport, _ = await loop.create_datagram_endpoint(
-                lambda: RelayProtocol(alloc),
-                local_addr=("0.0.0.0", relay_port),
-            )
-            alloc.transport = transport
-        except OSError:
-            logger.warning("Failed to bind relay port %d", relay_port)
+            alloc = Allocation(addr, relay_port, None, self)  # type: ignore
+
+            try:
+                loop = asyncio.get_running_loop()
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: RelayProtocol(alloc),
+                    local_addr=("0.0.0.0", relay_port),
+                )
+                alloc.transport = transport
+                break
+            except OSError:
+                logger.debug("Relay port %d in use, trying next", relay_port)
+                alloc = None
+                continue
+
+        if alloc is None or alloc.transport is None:
+            logger.warning("No available relay ports in range %d-%d", RELAY_PORT_MIN, RELAY_PORT_MAX)
             err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 5, 0) + b"Server Error")
             msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
             self.transport.sendto(msg, addr)

@@ -82,6 +82,7 @@ class WebSocketClient @Inject constructor(
         connectionJob?.cancel()
         connectionJob = null
         reconnectDelay = INITIAL_RECONNECT_DELAY
+        client.close()
     }
 
     private suspend fun connectWebSocket() {

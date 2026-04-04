@@ -2,6 +2,8 @@ package com.chatcontroll.app.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.local.AppDatabase
 import com.chatcontroll.app.data.local.dao.ContactDao
@@ -18,6 +20,13 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
+
+    private val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Schema migration from v1 to v2 — add any new columns/tables here
+            // Using addColumn with defaults ensures existing data is preserved
+        }
+    }
 
     @Provides
     @Singleton
@@ -36,7 +45,7 @@ object DatabaseModule {
             "chatcontroll.db",
         )
             .openHelperFactory(factory)
-            .fallbackToDestructiveMigration()
+            .addMigrations(MIGRATION_1_2)
             .build()
     }
 

@@ -42,7 +42,8 @@ class WebSocketManager:
         logger.info("WebSocket disconnected: %s", user_id[:8])
 
     def is_online(self, user_id: str) -> bool:
-        return bool(self._connections.get(user_id))
+        # Use get() with explicit default to avoid defaultdict creating empty entries
+        return bool(self._connections.get(user_id, None))
 
     async def notify_new_message(
         self,

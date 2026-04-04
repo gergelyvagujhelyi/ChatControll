@@ -32,7 +32,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         # Wait for auth message
         await websocket.accept()
         raw = await websocket.receive_text()
-        msg = json.loads(raw)
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": "Invalid JSON"})
+            )
+            await websocket.close(code=4002)
+            return
 
         if msg.get("type") != "auth" or not msg.get("user_id"):
             await websocket.send_text(
@@ -55,7 +62,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         # Keep alive loop
         while True:
             raw = await websocket.receive_text()
-            msg = json.loads(raw)
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Invalid JSON"})
+                )
+                continue
 
             msg_type = msg.get("type")
 
