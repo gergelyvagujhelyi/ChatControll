@@ -23,6 +23,7 @@ data class ChainKey(
 
     /** Advance the chain to the next step. */
     fun next(): ChainKey {
+        check(index < Int.MAX_VALUE) { "Chain key index overflow" }
         return ChainKey(
             key = hmacSha256(key, CHAIN_KEY_SEED),
             index = index + 1,

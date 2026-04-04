@@ -182,7 +182,7 @@ class DoubleRatchet(
 
     private fun skipMessageKeys(state: RatchetState, until: Int) {
         val chainKey = state.receivingChainKey ?: return
-        if (until - chainKey.index > RatchetState.MAX_SKIP) {
+        if (until < chainKey.index || until - chainKey.index > RatchetState.MAX_SKIP) {
             throw SecurityException("Too many skipped messages (possible attack)")
         }
 
@@ -236,6 +236,8 @@ class DoubleRatchet(
     }
 
     private fun aesGcmDecrypt(key: ByteArray, nonceAndCiphertext: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray {
+        // 12-byte nonce + at least 16-byte GCM tag
+        require(nonceAndCiphertext.size >= 28) { "Ciphertext too short" }
         val nonce = nonceAndCiphertext.copyOfRange(0, 12)
         val ct = nonceAndCiphertext.copyOfRange(12, nonceAndCiphertext.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

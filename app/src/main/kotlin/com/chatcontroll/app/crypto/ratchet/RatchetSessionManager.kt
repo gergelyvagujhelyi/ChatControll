@@ -190,9 +190,10 @@ class RatchetSessionManager @Inject constructor(
                 persistSession(sessionKeys.sessionId, state)
                 plaintext
             } catch (e: Exception) {
-                // ratchet.decrypt() mutates state in-place (DH ratchet step, skip keys)
-                // before AES-GCM decryption. If decryption fails, the in-memory state
-                // is now out of sync. Reload from persisted state to undo the damage.
+                // ratchet.decrypt() mutates state in-place (DH ratchet step, skip keys).
+                // On ANY failure (decrypt or persistence), rollback in-memory state to
+                // match disk — prevents replay if persistence failed after decrypt, and
+                // prevents state desync if decrypt itself failed.
                 val restored = loadPersistedSession(sessionKeys.sessionId)
                 if (restored != null) {
                     sessions[sessionKeys.sessionId] = restored

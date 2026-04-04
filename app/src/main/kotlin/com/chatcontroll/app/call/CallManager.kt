@@ -20,6 +20,7 @@ import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.nio.ByteBuffer
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -74,8 +75,10 @@ class CallManager @Inject constructor(
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     private var remoteDescriptionSet = false
     /** Track seen signal signatures with timestamps to reject replays.
-     *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS]. */
-    private val seenSignalSignatures = LinkedHashMap<String, Long>()
+     *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
+     *  Uses accessOrder=true for LRU eviction so recently verified signatures
+     *  cannot be evicted by a flood of new ones. */
+    private val seenSignalSignatures = LinkedHashMap<String, Long>(64, 0.75f, true)
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
 
@@ -120,10 +123,10 @@ class CallManager @Inject constructor(
                     Log.w(TAG, "Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
                     return@launch
                 }
-                val sigPayload = signal.senderId.toByteArray(Charsets.UTF_8) +
-                    localUserId.toByteArray(Charsets.UTF_8) +
-                    signal.signalType.toByteArray(Charsets.UTF_8) +
-                    signal.callId.toByteArray(Charsets.UTF_8) +
+                val sigPayload = lengthPrefixed(signal.senderId.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(signal.signalType.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(signal.callId.toByteArray(Charsets.UTF_8)) +
                     signal.encryptedPayload.toByteArray(Charsets.UTF_8)
                 val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
@@ -361,10 +364,10 @@ class CallManager @Inject constructor(
     private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String) {
         val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, payload) else ""
         val senderId = keyManager.getUserId() ?: return
-        val sigPayload = senderId.toByteArray(Charsets.UTF_8) +
-            peerId.toByteArray(Charsets.UTF_8) +
-            signalType.toByteArray(Charsets.UTF_8) +
-            callId.toByteArray(Charsets.UTF_8) +
+        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(peerId.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(signalType.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(callId.toByteArray(Charsets.UTF_8)) +
             encrypted.toByteArray(Charsets.UTF_8)
         val signature = Base64.encodeToString(keyManager.sign(sigPayload), Base64.NO_WRAP)
         try {
@@ -489,6 +492,10 @@ class CallManager @Inject constructor(
         private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_SEEN_SIGNATURES = 500
     }
+}
+
+private fun lengthPrefixed(data: ByteArray): ByteArray {
+    return ByteBuffer.allocate(4).putInt(data.size).array() + data
 }
 
 @Serializable

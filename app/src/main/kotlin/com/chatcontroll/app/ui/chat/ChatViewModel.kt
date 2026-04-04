@@ -81,7 +81,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             sendMessage(conversationId, contactId, text)
                 .onFailure { e ->
-                    _sendError.value = e.message
+                    _sendError.value = "Failed to send message"
                 }
         }
     }
@@ -91,7 +91,7 @@ class ChatViewModel @Inject constructor(
             try {
                 messageRepository.retryFailed(messageId)
             } catch (e: Exception) {
-                _sendError.value = e.message ?: "Retry failed"
+                _sendError.value = "Retry failed"
             }
         }
     }

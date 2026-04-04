@@ -20,9 +20,12 @@ import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
+import java.nio.ByteBuffer
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -37,6 +40,7 @@ class MessageRepositoryImpl @Inject constructor(
 ) : MessageRepository {
 
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
+    private val peerLocks = ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
     private val headerJson = Json { ignoreUnknownKeys = true }
 
     /** Track consecutive decrypt failures per message to avoid infinite retry. */
@@ -57,14 +61,16 @@ class MessageRepositoryImpl @Inject constructor(
         val now = System.currentTimeMillis()
         val senderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
 
-        // Encrypt the message — re-establish session if not cached
-        var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
-        if (sessionKeys == null) {
-            sessionKeys = tryEstablishSession(recipientId)
-                ?: throw IllegalStateException("No session established with $recipientId")
+        // Serialize ratchet operations per peer to prevent state divergence
+        val peerMutex = peerLocks.getOrPut(recipientId) { kotlinx.coroutines.sync.Mutex() }
+        val envelope = peerMutex.withLock {
+            var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
+            if (sessionKeys == null) {
+                sessionKeys = tryEstablishSession(recipientId)
+                    ?: throw IllegalStateException("No session established with $recipientId")
+            }
+            cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
         }
-
-        val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
         // Store locally as SENDING
         val entity = MessageEntity(
@@ -82,10 +88,10 @@ class MessageRepositoryImpl @Inject constructor(
         )
         messageDao.insert(entity)
 
-        // Sign the envelope for recipient verification
-        val sigPayload = senderId.toByteArray(Charsets.UTF_8) +
-            recipientId.toByteArray(Charsets.UTF_8) +
-            envelope.nonce + envelope.ciphertext
+        // Sign the envelope for recipient verification (length-prefixed to prevent ambiguity)
+        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(recipientId.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(envelope.nonce) + envelope.ciphertext
         val signature = keyManager.sign(sigPayload)
         val signatureB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
 
@@ -137,9 +143,9 @@ class MessageRepositoryImpl @Inject constructor(
             val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
             val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
-            val retrySigPayload = retrySenderId.toByteArray(Charsets.UTF_8) +
-                entity.recipientId.toByteArray(Charsets.UTF_8) +
-                envelope.nonce + envelope.ciphertext
+            val retrySigPayload = lengthPrefixed(retrySenderId.toByteArray(Charsets.UTF_8)) +
+                lengthPrefixed(entity.recipientId.toByteArray(Charsets.UTF_8)) +
+                lengthPrefixed(envelope.nonce) + envelope.ciphertext
             val retrySignature = keyManager.sign(retrySigPayload)
 
             val response = apiService.sendMessage(
@@ -226,9 +232,9 @@ class MessageRepositoryImpl @Inject constructor(
                     receivedIds.add(dto.messageId)
                     continue
                 }
-                val sigPayload = dto.senderId.toByteArray(Charsets.UTF_8) +
-                    localUserId.toByteArray(Charsets.UTF_8) +
-                    envelope.nonce + envelope.ciphertext
+                val sigPayload = lengthPrefixed(dto.senderId.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(envelope.nonce) + envelope.ciphertext
                 val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
@@ -238,8 +244,11 @@ class MessageRepositoryImpl @Inject constructor(
                 }
             }
 
+            val peerMutex = peerLocks.getOrPut(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
             val plaintext = try {
-                val result = cryptoEngine.decrypt(sessionKeys, envelope)
+                val result = peerMutex.withLock {
+                    cryptoEngine.decrypt(sessionKeys, envelope)
+                }
                 decryptFailCounts.remove(dto.messageId)
                 result
             } catch (e: Exception) {
@@ -400,6 +409,11 @@ class MessageRepositoryImpl @Inject constructor(
             )
         )
     }
+}
+
+/** Prepend 4-byte big-endian length prefix to prevent concatenation ambiguity in signature payloads. */
+private fun lengthPrefixed(data: ByteArray): ByteArray {
+    return ByteBuffer.allocate(4).putInt(data.size).array() + data
 }
 
 private fun MessageEntity.toDomain(localUserId: String): Message {

@@ -51,8 +51,9 @@ data class DhKeyPair(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is DhKeyPair) return false
-        return publicKey.contentEquals(other.publicKey)
+        return publicKey.contentEquals(other.publicKey) &&
+            privateKey.contentEquals(other.privateKey)
     }
 
-    override fun hashCode(): Int = publicKey.contentHashCode()
+    override fun hashCode(): Int = publicKey.contentHashCode() * 31 + privateKey.contentHashCode()
 }

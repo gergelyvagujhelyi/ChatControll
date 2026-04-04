@@ -58,7 +58,7 @@ class AddContactViewModel @Inject constructor(
                     _shareCodeInput.value = ""
                 }
                 .onFailure { e ->
-                    _state.value = AddContactState.Error(e.message ?: "Failed to add contact")
+                    _state.value = AddContactState.Error("Failed to add contact. Check the share code and try again.")
                 }
         }
     }

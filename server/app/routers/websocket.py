@@ -170,6 +170,13 @@ async def websocket_endpoint(
 
                 # Per-user signal rate limit (shared across all connections)
                 now_sig = time.monotonic()
+                # Periodically prune stale entries (idle > 5 min)
+                if len(_ws_signal_times) > 1000:
+                    stale = [uid for uid, ts in _ws_signal_times.items()
+                             if not ts or (now_sig - ts[-1]) > 300]
+                    for uid in stale:
+                        _ws_signal_times.pop(uid, None)
+                        _ws_call_offer_times.pop(uid, None)
                 sig_times = _ws_signal_times[user_id]
                 sig_times[:] = [t for t in sig_times if now_sig - t < 60]
                 if len(sig_times) >= _MAX_SIGNALS_PER_MINUTE:

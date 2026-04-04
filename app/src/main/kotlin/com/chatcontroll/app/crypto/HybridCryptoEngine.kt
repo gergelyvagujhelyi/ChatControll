@@ -64,18 +64,12 @@ class HybridCryptoEngine @Inject constructor(
         // Post-quantum KEM shared secret: initiator encapsulates, responder decapsulates
         var pqSecret = ByteArray(0)
         if (isInitiator && remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
-            try {
-                val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
-                pqSecret = encapsulation.sharedSecret
-                // Note: ciphertext must be transmitted to the peer for decapsulation
-            } catch (_: Exception) { /* fall back to classical only */ }
+            val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
+            pqSecret = encapsulation.sharedSecret
         } else if (!isInitiator && inboundKemCiphertext != null) {
-            try {
-                val dk = keyManager.getPqcDecapsulationKey()
-                if (dk != null) {
-                    pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
-                }
-            } catch (_: Exception) { /* fall back to classical only */ }
+            val dk = keyManager.getPqcDecapsulationKey()
+                ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
+            pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
         }
 
         // Combine via HKDF
