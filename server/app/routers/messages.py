@@ -8,10 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import verify_auth_token
 from app.config import MAX_PENDING_MESSAGES_PER_USER
 from app.database import get_db
 from app.models.db import Identity, PendingMessage
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/v1/messages", tags=["messages"])
 @router.post("/send", response_model=SendMessageResponse)
 async def send_message(
     request: SendMessageRequest,
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> SendMessageResponse:
     """Submit an encrypted envelope for relay to the recipient.
@@ -44,13 +45,6 @@ async def send_message(
 
     The server never inspects or logs the encrypted body.
     """
-    # Verify sender is a registered identity
-    sender_result = await db.execute(
-        select(Identity).where(Identity.user_id == x_user_id)
-    )
-    if sender_result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=403, detail="Unknown sender identity")
-
     # Rate limiting
     if not await check_rate_limit(db, x_user_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
@@ -113,7 +107,7 @@ async def send_message(
 
 @router.get("/pending", response_model=List[PendingMessageResponse])
 async def fetch_pending_messages(
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> List[PendingMessageResponse]:
     """Fetch all pending encrypted envelopes for the authenticated user.
@@ -144,7 +138,7 @@ async def fetch_pending_messages(
 @router.post("/ack")
 async def acknowledge_messages(
     request: AckRequest,
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Acknowledge receipt of messages, allowing the server to delete them.

@@ -4,10 +4,11 @@ Clients register their FCM push token so the server can send wake-up
 signals when new messages arrive and the recipient is offline.
 """
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import verify_auth_token
 from app.database import get_db
 from app.models.db import Identity
 from app.models.schemas import PushTokenRequest
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/v1/push", tags=["push"])
 @router.post("/register")
 async def register_push_token(
     request: PushTokenRequest,
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Register or update the FCM push token for the authenticated user."""
@@ -36,7 +37,7 @@ async def register_push_token(
 
 @router.delete("/register")
 async def unregister_push_token(
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Remove the FCM push token for the authenticated user."""

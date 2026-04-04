@@ -18,6 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
+from app.auth import _verify_token
 from app.database import async_session
 from app.models.db import Identity
 from app.services.websocket_manager import ws_manager
@@ -44,26 +45,47 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             await websocket.close(code=4002)
             return
 
-        if msg.get("type") != "auth" or not msg.get("user_id"):
+        if msg.get("type") != "auth" or not msg.get("token"):
             await websocket.send_text(
-                json.dumps({"type": "error", "message": "Expected auth message"})
+                json.dumps({"type": "error", "message": "Expected auth message with token"})
             )
             await websocket.close(code=4001)
             return
 
-        user_id = msg["user_id"]
+        token = msg["token"]
 
-        # Verify identity exists in the database
+        # Verify signed auth token against stored public key
+        parts = token.split(".", 2)
+        if len(parts) != 3:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": "Malformed token"})
+            )
+            await websocket.close(code=4003)
+            return
+
+        claimed_user_id = parts[0]
         async with async_session() as db:
             result = await db.execute(
-                select(Identity.user_id).where(Identity.user_id == user_id)
+                select(Identity.public_signing_key).where(
+                    Identity.user_id == claimed_user_id
+                )
             )
-            if result.scalar_one_or_none() is None:
+            pub_key_b64 = result.scalar_one_or_none()
+            if pub_key_b64 is None:
                 await websocket.send_text(
                     json.dumps({"type": "error", "message": "Unknown identity"})
                 )
                 await websocket.close(code=4003)
                 return
+
+        try:
+            user_id = _verify_token(token, pub_key_b64)
+        except ValueError as e:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": str(e)})
+            )
+            await websocket.close(code=4003)
+            return
 
         # Register with the manager (accept was already called above)
         await ws_manager.register(user_id, websocket)
