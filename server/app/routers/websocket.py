@@ -49,10 +49,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             return
 
         user_id = msg["user_id"]
-        # Re-register with the manager (accept was already called above,
-        # so we manually add to the manager without calling accept again)
-        async with ws_manager._lock:
-            ws_manager._connections[user_id].add(websocket)
+        # Register with the manager (accept was already called above)
+        await ws_manager.register(user_id, websocket)
         logger.info("WebSocket authenticated: %s", user_id[:8])
 
         await websocket.send_text(

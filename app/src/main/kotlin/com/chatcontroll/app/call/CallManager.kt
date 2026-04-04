@@ -14,8 +14,11 @@ import com.chatcontroll.app.data.remote.dto.CallSignalRequest
 import com.chatcontroll.app.domain.model.CallDirection
 import com.chatcontroll.app.domain.model.CallState
 import com.chatcontroll.app.domain.model.CallStatus
-import com.chatcontroll.app.domain.repository.CryptoEngine
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -38,7 +41,6 @@ import javax.inject.Singleton
 class CallManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val apiService: ApiService,
-    private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
     private val webSocketClient: WebSocketClient,
 ) {
@@ -319,17 +321,24 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun encryptPayload(peerId: String, plaintext: String): String {
+    /**
+     * Encrypt call signals using AES-256-GCM with the static session sendKey.
+     * This intentionally bypasses the Double Ratchet to avoid advancing the
+     * message chain — call signals are ephemeral and may be lost/reordered.
+     */
+    private fun encryptPayload(peerId: String, plaintext: String): String {
         val sessionKeys = keyManager.getCachedSessionKeys(peerId)
             ?: throw IllegalStateException("No session keys for $peerId — cannot encrypt call signal")
-        val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
-        // Pack as: nonce_b64.ciphertext_b64
-        val nonceB64 = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP)
-        val ctB64 = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP)
+        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeys.sendKey, "AES"), GCMParameterSpec(128, nonce))
+        val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        val nonceB64 = Base64.encodeToString(nonce, Base64.NO_WRAP)
+        val ctB64 = Base64.encodeToString(ciphertext, Base64.NO_WRAP)
         return "$nonceB64.$ctB64"
     }
 
-    private suspend fun decryptPayload(peerId: String, encrypted: String): String {
+    private fun decryptPayload(peerId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
         val sessionKeys = keyManager.getCachedSessionKeys(peerId)
             ?: throw IllegalStateException("No session keys for $peerId — cannot decrypt call signal")
@@ -337,9 +346,9 @@ class CallManager @Inject constructor(
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
-        val envelope = com.chatcontroll.app.domain.repository.EncryptedEnvelope(ciphertext, nonce)
-        val plainBytes = cryptoEngine.decrypt(sessionKeys, envelope)
-        return String(plainBytes, Charsets.UTF_8)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sessionKeys.receiveKey, "AES"), GCMParameterSpec(128, nonce))
+        return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
     }
 
     private fun requestAudioFocus() {

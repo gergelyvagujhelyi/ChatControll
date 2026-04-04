@@ -75,8 +75,9 @@ async def send_message(
         )
 
     message_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    timestamp_ms = int(now.timestamp() * 1000)
+    now_utc = datetime.now(timezone.utc)
+    timestamp_ms = int(now_utc.timestamp() * 1000)
+    now = now_utc.replace(tzinfo=None)
 
     pending = PendingMessage(
         message_id=message_id,

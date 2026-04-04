@@ -33,6 +33,10 @@ class WebSocketManager:
 
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
+        await self.register(user_id, websocket)
+
+    async def register(self, user_id: str, websocket: WebSocket) -> None:
+        """Register an already-accepted WebSocket, enforcing per-user cap."""
         async with self._lock:
             if len(self._connections[user_id]) >= MAX_WS_CONNECTIONS_PER_USER:
                 # Evict the oldest connection
