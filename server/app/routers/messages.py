@@ -99,7 +99,8 @@ async def send_message(
             await send_push_notification(
                 fcm_token=recipient.fcm_token,
                 sender_id=x_user_id,
-                conversation_id=x_user_id,  # Simplified; real impl would have conversation IDs
+                conversation_id=x_user_id,
+                recipient_id=request.recipient_id,
             )
 
     return SendMessageResponse(message_id=message_id, timestamp=timestamp_ms)
@@ -109,16 +110,24 @@ async def send_message(
 async def fetch_pending_messages(
     x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
+    limit: int = 100,
 ) -> List[PendingMessageResponse]:
-    """Fetch all pending encrypted envelopes for the authenticated user.
+    """Fetch pending encrypted envelopes for the authenticated user.
 
     The client decrypts these locally. The envelopes remain in the database
-    until the client acknowledges receipt.
+    until the client acknowledges receipt. Use ``limit`` to paginate;
+    after ACK-ing a batch the next fetch returns the next oldest messages.
     """
+    if limit < 1:
+        limit = 1
+    elif limit > 500:
+        limit = 500
+
     result = await db.execute(
         select(PendingMessage)
         .where(PendingMessage.recipient_id == x_user_id)
         .order_by(PendingMessage.created_at.asc())
+        .limit(limit)
     )
     messages = result.scalars().all()
 

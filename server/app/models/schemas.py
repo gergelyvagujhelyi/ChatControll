@@ -31,6 +31,12 @@ class ResolveShareCodeResponse(BaseModel):
     pqc_encapsulation_key: str
 
 
+class KeyRotationRequest(BaseModel):
+    public_signing_key: str = Field(..., max_length=4096)
+    public_identity_key: str = Field(..., max_length=4096)
+    pqc_encapsulation_key: Optional[str] = Field(None, max_length=8192)
+
+
 class SendMessageRequest(BaseModel):
     recipient_id: str = Field(..., max_length=64)
     encrypted_body: str = Field(..., max_length=1_000_000)

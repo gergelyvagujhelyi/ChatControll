@@ -6,6 +6,7 @@ The client fetches encrypted envelopes directly from this server after wake-up.
 
 import asyncio
 import logging
+from typing import Optional
 
 from app.config import FIREBASE_CREDENTIALS
 
@@ -36,16 +37,41 @@ def _init_firebase() -> bool:
         return False
 
 
+async def _clear_stale_token(recipient_id: str) -> None:
+    """Remove the FCM token for a user whose token is no longer valid."""
+    try:
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.db import Identity
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(Identity).where(Identity.user_id == recipient_id)
+            )
+            identity = result.scalar_one_or_none()
+            if identity and identity.fcm_token:
+                identity.fcm_token = None
+                await db.commit()
+                logger.info("Cleared stale FCM token for %s", recipient_id[:8])
+    except Exception:
+        logger.exception("Failed to clear stale FCM token for %s", recipient_id[:8])
+
+
 async def send_push_notification(
     fcm_token: str,
     sender_id: str,
     conversation_id: str,
+    recipient_id: Optional[str] = None,
 ) -> bool:
     """Send a wake-up push to a device.
 
     The payload contains only the sender ID and a conversation hint —
     never any message content. The client fetches the encrypted envelope
     from the /v1/messages/pending endpoint.
+
+    If the FCM token is invalid/expired, it is automatically cleared from
+    the database so future sends fall back to polling.
     """
     if not _init_firebase():
         return False
@@ -57,18 +83,24 @@ async def send_push_notification(
             data={
                 "type": "new_message",
                 "senderId": sender_id,
-                # Conversation ID helps the client deep-link, but is not sensitive
-                # since the server already knows sender→recipient routing.
                 "conversationId": conversation_id,
             },
             token=fcm_token,
             android=messaging.AndroidConfig(
                 priority="high",
-                ttl=60,  # seconds — stale pushes are useless
+                ttl=60,
             ),
         )
         await asyncio.to_thread(messaging.send, message)
         return True
-    except Exception:
-        logger.exception("Failed to send push notification")
+    except Exception as e:
+        error_name = type(e).__name__
+        # Firebase raises specific errors for invalid tokens
+        if error_name in ("UnregisteredError", "InvalidArgumentError", "SenderIdMismatchError"):
+            logger.warning("FCM token invalid (%s) for %s — clearing",
+                           error_name, (recipient_id or "unknown")[:8])
+            if recipient_id:
+                await _clear_stale_token(recipient_id)
+        else:
+            logger.exception("Failed to send push notification")
         return False

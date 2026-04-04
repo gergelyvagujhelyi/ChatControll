@@ -1,6 +1,6 @@
 """WebSocket endpoint for real-time message delivery signals.
 
-Clients connect with their user_id and receive JSON notifications when
+Clients authenticate with a signed token and receive JSON notifications when
 new messages are available. Message content is never sent over WebSocket —
 only a signal to fetch from the REST API.
 
@@ -12,6 +12,7 @@ Protocol:
 - Server sends: {"type": "pong"}
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -20,6 +21,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.auth import verify_token
+from app.config import WS_IDLE_TIMEOUT_SECONDS
 from app.database import async_session
 from app.models.db import Identity
 from app.services.websocket_manager import ws_manager
@@ -96,9 +98,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             json.dumps({"type": "auth_ok"})
         )
 
-        # Keep alive loop
+        # Keep alive loop — idle connections are closed after timeout
         while True:
-            raw = await websocket.receive_text()
+            try:
+                raw = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=WS_IDLE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                await websocket.close(code=4008, reason="Idle timeout")
+                break
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:

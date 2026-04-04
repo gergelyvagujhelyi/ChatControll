@@ -18,6 +18,8 @@ MAX_MESSAGES_PER_MINUTE: int = int(os.getenv("MAX_MESSAGES_PER_MINUTE", "60"))
 MAX_PENDING_MESSAGES_PER_USER: int = int(
     os.getenv("MAX_PENDING_MESSAGES_PER_USER", "1000")
 )
+MAX_REQUEST_BODY_BYTES: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(2 * 1024 * 1024)))  # 2 MB
+WS_IDLE_TIMEOUT_SECONDS: int = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))  # 5 min
 TURN_ENABLED: bool = os.getenv("TURN_ENABLED", "true").lower() == "true"
 # For Android emulators, use 10.0.2.2 (host alias inside emulator).
 # For real devices, set to your server's public IP.

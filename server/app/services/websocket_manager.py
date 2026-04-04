@@ -91,6 +91,23 @@ class WebSocketManager:
 
         return notified
 
+    async def shutdown(self) -> None:
+        """Gracefully close all connections (called on server shutdown)."""
+        async with self._lock:
+            all_sockets = [
+                (uid, ws)
+                for uid, conns in self._connections.items()
+                for ws in conns
+            ]
+            self._connections.clear()
+
+        for uid, ws in all_sockets:
+            try:
+                await ws.close(code=1012, reason="Server shutting down")
+            except Exception:
+                pass
+        logger.info("All WebSocket connections closed for shutdown")
+
     async def relay_call_signal(
         self,
         sender_id: str,

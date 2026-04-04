@@ -8,14 +8,13 @@ The server stores only what it must to route encrypted envelopes:
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     Column,
     DateTime,
     Index,
     Integer,
     String,
     Text,
-    text,
+    func,
 )
 from sqlalchemy.orm import DeclarativeBase
 
@@ -35,8 +34,8 @@ class Identity(Base):
     pqc_encapsulation_key = Column(Text, nullable=False, default="")
     share_code = Column(String(24), unique=True, nullable=False, index=True)
     fcm_token = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=text("(strftime('%Y-%m-%d %H:%M:%f', 'now'))"))
-    last_seen_at = Column(DateTime, server_default=text("(strftime('%Y-%m-%d %H:%M:%f', 'now'))"))
+    created_at = Column(DateTime, server_default=func.now())
+    last_seen_at = Column(DateTime, server_default=func.now())
 
 
 
@@ -54,7 +53,7 @@ class PendingMessage(Base):
     nonce = Column(Text, nullable=False)
     ephemeral_public_key = Column(Text, nullable=False, default="")
     timestamp_ms = Column(Integer, nullable=True)
-    created_at = Column(DateTime, server_default=text("(strftime('%Y-%m-%d %H:%M:%f', 'now'))"))
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class RateLimit(Base):
@@ -64,4 +63,4 @@ class RateLimit(Base):
 
     user_id = Column(String(32), primary_key=True)
     message_count = Column(Integer, default=0)
-    window_start = Column(DateTime, server_default=text("(strftime('%Y-%m-%d %H:%M:%f', 'now'))"))
+    window_start = Column(DateTime, server_default=func.now())

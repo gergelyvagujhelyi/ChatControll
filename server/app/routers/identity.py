@@ -9,16 +9,18 @@ import hashlib
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import verify_auth_token
 from app.database import get_db
-from app.models.db import Identity
+from app.models.db import Identity, PendingMessage, RateLimit
 from app.models.schemas import (
     BootstrapRequest,
     BootstrapResponse,
     KeyBundleResponse,
+    KeyRotationRequest,
     ResolveShareCodeResponse,
 )
 
@@ -107,6 +109,60 @@ async def resolve_share_code(
         public_identity_key=identity.public_identity_key,
         pqc_encapsulation_key=identity.pqc_encapsulation_key,
     )
+
+
+@router.delete("/me")
+async def delete_identity(
+    x_user_id: str = Depends(verify_auth_token),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete the authenticated user's identity and all associated data.
+
+    Removes the identity, all pending messages (sent and received),
+    and rate-limit records. This is irreversible.
+    """
+    await db.execute(
+        delete(PendingMessage).where(
+            (PendingMessage.sender_id == x_user_id)
+            | (PendingMessage.recipient_id == x_user_id)
+        )
+    )
+    await db.execute(delete(RateLimit).where(RateLimit.user_id == x_user_id))
+    result = await db.execute(delete(Identity).where(Identity.user_id == x_user_id))
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.commit()
+    return {"status": "deleted"}
+
+
+@router.put("/me/keys")
+async def rotate_keys(
+    request: KeyRotationRequest,
+    x_user_id: str = Depends(verify_auth_token),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Rotate the authenticated user's public keys.
+
+    The request is authenticated with the *current* signing key.
+    After this call, subsequent auth tokens must be signed with the new key.
+    """
+    result = await db.execute(
+        select(Identity).where(Identity.user_id == x_user_id)
+    )
+    identity = result.scalar_one_or_none()
+    if identity is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    identity.public_signing_key = request.public_signing_key
+    identity.public_identity_key = request.public_identity_key
+    if request.pqc_encapsulation_key is not None:
+        identity.pqc_encapsulation_key = request.pqc_encapsulation_key
+
+    # Recompute share code from new identity key
+    identity.share_code = _derive_share_code(request.public_identity_key)
+
+    await db.commit()
+    return {"status": "ok", "share_code": identity.share_code}
 
 
 def _derive_share_code(public_identity_key_b64: str) -> str:
