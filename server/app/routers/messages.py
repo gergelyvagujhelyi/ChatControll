@@ -99,8 +99,6 @@ async def send_message(
         if recipient.fcm_token:
             await send_push_notification(
                 fcm_token=recipient.fcm_token,
-                sender_id=x_user_id,
-                conversation_id=x_user_id,
                 recipient_id=request.recipient_id,
             )
 

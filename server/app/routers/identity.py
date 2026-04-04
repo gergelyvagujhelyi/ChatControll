@@ -145,8 +145,25 @@ async def rotate_keys(
     """Rotate the authenticated user's public keys.
 
     The request is authenticated with the *current* signing key.
+    The caller must also prove possession of the *new* signing key by
+    signing the new public_signing_key with the corresponding new private key.
     After this call, subsequent auth tokens must be signed with the new key.
     """
+    # Verify proof-of-possession for the new signing key
+    try:
+        new_pub_bytes = base64.b64decode(request.public_signing_key, validate=True)
+        proof_sig = base64.b64decode(request.new_key_proof, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 in key rotation request")
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.exceptions import InvalidSignature
+    try:
+        new_pub_key = Ed25519PublicKey.from_public_bytes(new_pub_bytes)
+        new_pub_key.verify(proof_sig, request.public_signing_key.encode("utf-8"))
+    except (InvalidSignature, Exception):
+        raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
+
     result = await db.execute(
         select(Identity).where(Identity.user_id == x_user_id)
     )
@@ -167,7 +184,13 @@ async def rotate_keys(
 
 
 def _derive_share_code(public_identity_key_b64: str) -> str:
-    """Derive a short, URL-safe share code from the public identity key."""
+    """Derive a short, URL-safe share code from the public identity key.
+
+    Uses 12 bytes (96 bits) of SHA-256 — intentionally short for usability.
+    Share codes are public lookup handles (displayed in UI, shared via QR),
+    NOT secrets or authentication factors. 96 bits gives negligible collision
+    probability at realistic user populations (~2^48 for 50% birthday bound).
+    """
     try:
         key_bytes = base64.b64decode(public_identity_key_b64, validate=True)
     except Exception:

@@ -18,6 +18,9 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from app.config import METRICS_TOKEN
 
 
+_MAX_METRIC_KEYS = 10_000
+
+
 class Metrics:
     def __init__(self) -> None:
         self._lock = Lock()
@@ -29,10 +32,17 @@ class Metrics:
     def record(self, method: str, path: str, status: int, duration: float) -> None:
         key = f'{method} {path}'
         with self._lock:
+            if key not in self._request_count and len(self._request_count) >= _MAX_METRIC_KEYS:
+                return  # Cap cardinality — drop new keys
             self._request_count[key] += 1
             self._latency_sum[key] += duration
             if status >= 400:
                 self._request_errors[key] += 1
+
+    @staticmethod
+    def _escape_label(value: str) -> str:
+        """Escape a Prometheus label value (backslash, double-quote, newline)."""
+        return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
     def expose(self) -> str:
         lines = []
@@ -41,19 +51,19 @@ class Metrics:
             lines.append("# TYPE http_requests_total counter")
             for key, count in sorted(self._request_count.items()):
                 method, path = key.split(" ", 1)
-                lines.append(f'http_requests_total{{method="{method}",path="{path}"}} {count}')
+                lines.append(f'http_requests_total{{method="{self._escape_label(method)}",path="{self._escape_label(path)}"}} {count}')
 
             lines.append("# HELP http_request_errors_total HTTP requests with 4xx/5xx status")
             lines.append("# TYPE http_request_errors_total counter")
             for key, count in sorted(self._request_errors.items()):
                 method, path = key.split(" ", 1)
-                lines.append(f'http_request_errors_total{{method="{method}",path="{path}"}} {count}')
+                lines.append(f'http_request_errors_total{{method="{self._escape_label(method)}",path="{self._escape_label(path)}"}} {count}')
 
             lines.append("# HELP http_request_duration_seconds_sum Total request processing time")
             lines.append("# TYPE http_request_duration_seconds_sum counter")
             for key, total in sorted(self._latency_sum.items()):
                 method, path = key.split(" ", 1)
-                lines.append(f'http_request_duration_seconds_sum{{method="{method}",path="{path}"}} {total:.6f}')
+                lines.append(f'http_request_duration_seconds_sum{{method="{self._escape_label(method)}",path="{self._escape_label(path)}"}} {total:.6f}')
 
             lines.append("# HELP ws_active_connections Current WebSocket connections")
             lines.append("# TYPE ws_active_connections gauge")
@@ -78,10 +88,14 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         for prefix in ("/v1/identity/", "/v1/messages/", "/v1/calls/", "/v1/push/"):
             if path.startswith(prefix):
-                # Keep the first segment after prefix, strip IDs
                 rest = path[len(prefix):]
-                if "/" in rest:
+                if rest.startswith("resolve/"):
+                    path = prefix + "resolve/{code}"
+                elif "/" in rest:
                     path = prefix + "{id}" + rest[rest.index("/"):]
+                elif rest not in ("bootstrap", "me", "send", "pending", "ack",
+                                  "register", "signal", "ice-servers", "me/keys"):
+                    path = prefix + "{id}"
                 break
 
         metrics.record(request.method, path, response.status_code, duration)

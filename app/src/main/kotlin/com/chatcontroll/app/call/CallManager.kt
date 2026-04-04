@@ -8,6 +8,7 @@ import android.util.Base64
 import android.util.Log
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.hkdfSha256
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -68,9 +70,12 @@ class CallManager @Inject constructor(
     private val _callState = MutableStateFlow<CallState?>(null)
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
-    private val pendingIceCandidates = mutableListOf<IceCandidateDto>()
+    private val signalMutex = kotlinx.coroutines.sync.Mutex()
+    private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     private var remoteDescriptionSet = false
-
+    /** Track seen signal signatures with timestamps to reject replays.
+     *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS]. */
+    private val seenSignalSignatures = LinkedHashMap<String, Long>()
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
 
@@ -102,24 +107,45 @@ class CallManager @Inject constructor(
     fun handleIncomingSignal(signal: CallSignalDto) {
         logDebug("Incoming signal: ${signal.signalType}")
         scope.launch {
+            signalMutex.withLock {
             try {
-                // Verify signature if present
-                if (signal.signature.isNotEmpty()) {
-                    val localUserId = keyManager.getUserId() ?: return@launch
-                    val contact = contactDao.getByUserId(signal.senderId)
-                    if (contact != null) {
-                        val sigPayload = signal.senderId.toByteArray(Charsets.UTF_8) +
-                            localUserId.toByteArray(Charsets.UTF_8) +
-                            signal.signalType.toByteArray(Charsets.UTF_8) +
-                            signal.callId.toByteArray(Charsets.UTF_8) +
-                            signal.encryptedPayload.toByteArray(Charsets.UTF_8)
-                        val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
-                        val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
-                        if (!valid) {
-                            Log.w(TAG, "Call signal signature verification failed")
-                            return@launch
-                        }
-                    }
+                // Verify call signal signature (mandatory)
+                val localUserId = keyManager.getUserId() ?: return@launch
+                if (signal.signature.isEmpty()) {
+                    Log.w(TAG, "Rejecting unsigned call signal from ${signal.senderId.take(8)}")
+                    return@launch
+                }
+                val contact = contactDao.getByUserId(signal.senderId)
+                if (contact == null) {
+                    Log.w(TAG, "Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
+                    return@launch
+                }
+                val sigPayload = signal.senderId.toByteArray(Charsets.UTF_8) +
+                    localUserId.toByteArray(Charsets.UTF_8) +
+                    signal.signalType.toByteArray(Charsets.UTF_8) +
+                    signal.callId.toByteArray(Charsets.UTF_8) +
+                    signal.encryptedPayload.toByteArray(Charsets.UTF_8)
+                val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
+                val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
+                if (!valid) {
+                    Log.w(TAG, "Call signal signature verification failed")
+                    return@launch
+                }
+                // Reject replayed signals (same signature = same signal)
+                val now = System.currentTimeMillis()
+                // Evict expired entries
+                val iter = seenSignalSignatures.iterator()
+                while (iter.hasNext()) {
+                    if (now - iter.next().value > SIGNATURE_TTL_MS) iter.remove() else break
+                }
+                if (seenSignalSignatures.containsKey(signal.signature)) {
+                    logDebug("Rejecting replayed call signal")
+                    return@launch
+                }
+                seenSignalSignatures[signal.signature] = now
+                // Cap size as a safety bound
+                while (seenSignalSignatures.size > MAX_SEEN_SIGNATURES) {
+                    seenSignalSignatures.remove(seenSignalSignatures.keys.first())
                 }
                 when (signal.signalType) {
                     "call_offer" -> handleOffer(signal)
@@ -132,6 +158,7 @@ class CallManager @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to handle signal: ${signal.signalType}", e)
             }
+            } // signalMutex
         }
     }
 
@@ -142,7 +169,6 @@ class CallManager @Inject constructor(
             return
         }
 
-        _pendingOfferPayload = signal.encryptedPayload
         val displayName = signal.senderId.take(8)
         _callState.value = CallState(
             callId = signal.callId,
@@ -151,6 +177,7 @@ class CallManager @Inject constructor(
             direction = CallDirection.INCOMING,
             status = CallStatus.RINGING,
         )
+        _pendingOfferPayload = signal.encryptedPayload
     }
 
     fun acceptCall() {
@@ -160,12 +187,13 @@ class CallManager @Inject constructor(
         _callState.value = state.copy(status = CallStatus.CONNECTING)
 
         scope.launch {
+            signalMutex.withLock {
             try {
                 logDebug("Accepting incoming call")
                 setupWebRtc(state.peerId)
 
                 // Decrypt the offer SDP
-                val sdpJson = decryptPayload(state.peerId, _pendingOfferPayload ?: return@launch)
+                val sdpJson = decryptPayload(state.peerId, state.callId, _pendingOfferPayload ?: return@withLock)
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
                 logDebug("Decoded offer SDP")
 
@@ -188,6 +216,7 @@ class CallManager @Inject constructor(
                 Log.e(TAG, "Failed to accept call", e)
                 endCall(CallStatus.FAILED)
             }
+            } // signalMutex
         }
     }
 
@@ -227,7 +256,7 @@ class CallManager @Inject constructor(
         val state = _callState.value ?: return
         _callState.value = state.copy(status = CallStatus.CONNECTING)
 
-        val sdpJson = decryptPayload(signal.senderId, signal.encryptedPayload)
+        val sdpJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
         webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
 
@@ -242,7 +271,7 @@ class CallManager @Inject constructor(
     }
 
     private suspend fun handleIceCandidate(signal: CallSignalDto) {
-        val candidateJson = decryptPayload(signal.senderId, signal.encryptedPayload)
+        val candidateJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
         if (webRtcEngine != null && remoteDescriptionSet) {
@@ -382,31 +411,52 @@ class CallManager @Inject constructor(
     }
 
     /**
-     * Encrypt call signals using AES-256-GCM with the static session sendKey.
-     * This intentionally bypasses the Double Ratchet to avoid advancing the
-     * message chain — call signals are ephemeral and may be lost/reordered.
+     * Derive a per-call ephemeral key from the session key and callId.
+     * This provides call-level forward secrecy: compromise of one call's
+     * key does not expose signals from other calls.
+     */
+    private fun deriveCallKey(sessionKey: ByteArray, callId: String): ByteArray {
+        return hkdfSha256(
+            ikm = sessionKey,
+            salt = callId.toByteArray(Charsets.UTF_8),
+            info = "ChatControll-call-signal".toByteArray(Charsets.UTF_8),
+            length = 32,
+        )
+    }
+
+    /**
+     * Encrypt call signals using AES-256-GCM with a per-call ephemeral key
+     * derived from the session key and callId. This bypasses the Double Ratchet
+     * to avoid advancing the message chain — call signals are ephemeral and
+     * may be lost/reordered.
      */
     private suspend fun encryptPayload(peerId: String, plaintext: String): String {
         val sessionKeys = ensureSessionKeys(peerId)
+        val callId = _callState.value?.callId ?: throw IllegalStateException("No active call")
+        val callKey = deriveCallKey(sessionKeys.sendKey, callId)
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeys.sendKey, "AES"), GCMParameterSpec(128, nonce))
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
         val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        callKey.fill(0)
         val nonceB64 = Base64.encodeToString(nonce, Base64.NO_WRAP)
         val ctB64 = Base64.encodeToString(ciphertext, Base64.NO_WRAP)
         return "$nonceB64.$ctB64"
     }
 
-    private suspend fun decryptPayload(peerId: String, encrypted: String): String {
+    private suspend fun decryptPayload(peerId: String, callId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
         val sessionKeys = ensureSessionKeys(peerId)
+        val callKey = deriveCallKey(sessionKeys.receiveKey, callId)
         require(encrypted.contains('.')) { "Invalid encrypted payload format" }
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sessionKeys.receiveKey, "AES"), GCMParameterSpec(128, nonce))
-        return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
+        val result = String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        callKey.fill(0)
+        return result
     }
 
     private fun requestAudioFocus() {
@@ -436,6 +486,8 @@ class CallManager @Inject constructor(
     companion object {
         private const val TAG = "CallManager"
         private const val MAX_PENDING_ICE_CANDIDATES = 100
+        private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
+        private const val MAX_SEEN_SIGNATURES = 500
     }
 }
 

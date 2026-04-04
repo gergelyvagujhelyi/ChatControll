@@ -109,3 +109,17 @@ data class IceServerDto(
 data class IceServersResponse(
     val iceServers: List<IceServerDto>,
 )
+
+@Serializable
+data class KeyRotationRequest(
+    val publicSigningKey: String,
+    val publicIdentityKey: String,
+    val pqcEncapsulationKey: String? = null,
+    val newKeyProof: String,
+)
+
+@Serializable
+data class KeyRotationResponse(
+    val status: String,
+    val shareCode: String,
+)

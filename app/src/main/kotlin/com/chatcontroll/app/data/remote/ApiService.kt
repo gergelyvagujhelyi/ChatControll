@@ -10,6 +10,8 @@ import com.chatcontroll.app.data.remote.dto.ResolveShareCodeResponse
 import com.chatcontroll.app.data.remote.dto.CallSignalRequest
 import com.chatcontroll.app.data.remote.dto.CallSignalResponse
 import com.chatcontroll.app.data.remote.dto.IceServersResponse
+import com.chatcontroll.app.data.remote.dto.KeyRotationRequest
+import com.chatcontroll.app.data.remote.dto.KeyRotationResponse
 import com.chatcontroll.app.data.remote.dto.SendMessageRequest
 import com.chatcontroll.app.data.remote.dto.SendMessageResponse
 
@@ -31,6 +33,7 @@ import com.chatcontroll.app.data.remote.dto.SendMessageResponse
  * POST   /v1/messages/ack                — acknowledge receipt of messages
  * POST   /v1/push/register               — register FCM token
  * DELETE /v1/push/register               — unregister FCM token
+ * PUT    /v1/identity/me/keys            — rotate public keys
  */
 interface ApiService {
     suspend fun bootstrapIdentity(request: BootstrapRequest): BootstrapResponse
@@ -43,4 +46,5 @@ interface ApiService {
     suspend fun unregisterPushToken()
     suspend fun sendCallSignal(request: CallSignalRequest): CallSignalResponse
     suspend fun getIceServers(): IceServersResponse
+    suspend fun rotateKeys(request: KeyRotationRequest): KeyRotationResponse
 }

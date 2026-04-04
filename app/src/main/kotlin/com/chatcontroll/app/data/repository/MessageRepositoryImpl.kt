@@ -202,6 +202,15 @@ class MessageRepositoryImpl @Inject constructor(
                 nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
             )
 
+            // Check if signature is required: reject unsigned messages unless
+            // the contact explicitly has signatureRequired=false (legacy contact)
+            val senderContact = contactDao.getByUserId(dto.senderId)
+            if (dto.signature.isEmpty() && (senderContact == null || senderContact.signatureRequired)) {
+                android.util.Log.w("MessageRepo", "Rejecting unsigned message from ${dto.senderId.take(8)}")
+                receivedIds.add(dto.messageId)
+                continue
+            }
+
             // Verify sender signature if present
             if (dto.signature.isNotEmpty()) {
                 // Ensure contact exists so we have the public signing key
@@ -312,14 +321,32 @@ class MessageRepositoryImpl @Inject constructor(
             )
             keyManager.cacheSessionKeys(remoteUserId, sessionKeys)
 
-            // Save as contact
-            if (contactDao.getByUserId(remoteUserId) == null) {
+            // Save as contact and track PQC status + key continuity
+            val existingContact = contactDao.getByUserId(remoteUserId)
+            if (existingContact == null) {
                 contactDao.upsert(ContactEntity(
                     userId = remoteUserId,
                     displayName = remoteUserId.take(8),
                     publicIdentityKey = pubIdKey,
                     publicSigningKey = pubSignKey,
+                    pqcEstablished = sessionKeys.pqcEstablished,
                 ))
+            } else {
+                // Key continuity check: reject if signing key changed unexpectedly
+                if (!existingContact.publicSigningKey.contentEquals(pubSignKey)) {
+                    android.util.Log.w("MessageRepo",
+                        "KEY CHANGE detected for ${remoteUserId.take(8)}: " +
+                        "signing key differs from stored key, rejecting session")
+                    return null
+                }
+
+                if (existingContact.pqcEstablished && !sessionKeys.pqcEstablished) {
+                    android.util.Log.w("MessageRepo",
+                        "PQC DOWNGRADE for ${remoteUserId.take(8)}: " +
+                        "session was hybrid PQ, now classical only")
+                } else if (sessionKeys.pqcEstablished && !existingContact.pqcEstablished) {
+                    contactDao.upsert(existingContact.copy(pqcEstablished = true))
+                }
             }
 
             sessionKeys

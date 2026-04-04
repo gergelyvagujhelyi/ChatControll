@@ -76,24 +76,19 @@ class RatchetSessionManager @Inject constructor(
         var kemCiphertext: ByteArray? = null
 
         if (isInitiator && remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
-            // Initiator: encapsulate against the remote's ML-KEM public key
-            try {
-                val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
-                pqcSecret = encapsulation.sharedSecret
-                kemCiphertext = encapsulation.ciphertext
-            } catch (e: Exception) {
-                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("RatchetSession", "PQC encapsulation failed, classical only: ${e.message}")
-            }
+            // Initiator: encapsulate against the remote's ML-KEM public key.
+            // If the remote advertises PQC, encapsulation MUST succeed —
+            // silent fallback to classical would be a cryptographic downgrade.
+            val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
+            pqcSecret = encapsulation.sharedSecret
+            kemCiphertext = encapsulation.ciphertext
         } else if (!isInitiator && inboundKemCiphertext != null) {
-            // Responder: decapsulate using our local ML-KEM decapsulation key
-            try {
-                val decapsulationKey = keyManager.getPqcDecapsulationKey()
-                if (decapsulationKey != null) {
-                    pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
-                }
-            } catch (e: Exception) {
-                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("RatchetSession", "PQC decapsulation failed, classical only: ${e.message}")
-            }
+            // Responder: decapsulate using our local ML-KEM decapsulation key.
+            // Inbound KEM ciphertext means the initiator expects a hybrid session —
+            // failure must not be swallowed.
+            val decapsulationKey = keyManager.getPqcDecapsulationKey()
+                ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
+            pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
         }
 
         // Combine classical + PQC secrets via HKDF
@@ -221,9 +216,26 @@ class RatchetSessionManager @Inject constructor(
         return classicalKeyAgreement.verify(data, signature, publicSigningKey)
     }
 
+    /**
+     * Derive a human-shareable code from the public identity key.
+     *
+     * Uses 12 bytes (96 bits) of SHA-256 — intentionally short for usability.
+     * Share codes are NOT secrets: they are displayed in the UI and shared via
+     * QR codes. They serve only as a lookup handle, not an authentication factor.
+     * Collision probability is negligible at realistic user populations (~2^48
+     * users needed for a 50% birthday collision).
+     */
     override fun deriveShareCode(publicIdentityKey: ByteArray): String {
         val hash = MessageDigest.getInstance("SHA-256").digest(publicIdentityKey)
         return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP)
+    }
+
+    /** Clear all in-memory and persisted ratchet sessions (e.g. after key rotation). */
+    suspend fun clearAllSessions() {
+        sessionsMutex.withLock {
+            sessions.clear()
+            keyManager.removeAllRatchetStates()
+        }
     }
 
     // ── Session persistence ──────────────────────────────────────────
@@ -240,7 +252,7 @@ class RatchetSessionManager @Inject constructor(
             receivingChainIndex = state.receivingChainKey?.index ?: 0,
             previousSendingChainLength = state.previousSendingChainLength,
             skippedKeys = state.skippedMessageKeys.map { (k, v) ->
-                SkippedKeyEntry(k.first, k.second, v.b64())
+                SkippedKeyEntry(k.first, k.second, v.b64(), state.skippedKeyTimestamps[k] ?: System.currentTimeMillis())
             },
             pendingKemCiphertext = state.pendingKemCiphertext?.b64(),
             pqcEstablished = state.pqcEstablished,
@@ -262,11 +274,14 @@ class RatchetSessionManager @Inject constructor(
                 skippedMessageKeys = dto.skippedKeys.associate {
                     (it.publicKeyHex to it.messageNumber) to it.key.fromB64()
                 }.toMutableMap(),
+                skippedKeyTimestamps = dto.skippedKeys.associate {
+                    (it.publicKeyHex to it.messageNumber) to it.timestamp
+                }.toMutableMap(),
                 pendingKemCiphertext = dto.pendingKemCiphertext?.fromB64(),
                 pqcEstablished = dto.pqcEstablished,
             )
         } catch (e: Exception) {
-            Log.w("RatchetSession", "Failed to load session $sessionId: ${e.message}")
+            Log.w("RatchetSession", "Failed to load persisted session")
             keyManager.removeRatchetState(sessionId)
             null
         }
@@ -301,6 +316,7 @@ private data class SkippedKeyEntry(
     val publicKeyHex: String,
     val messageNumber: Int,
     val key: String,
+    val timestamp: Long = System.currentTimeMillis(),
 )
 
 private fun ByteArray.b64(): String = Base64.encodeToString(this, Base64.NO_WRAP)

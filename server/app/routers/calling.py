@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import time
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -14,7 +15,7 @@ from app.models.schemas import (
     IceServer,
     IceServersResponse,
 )
-from app.config import TURN_CREDENTIAL_TTL, TURN_PASSWORD, TURN_SECRET, TURN_USERNAME
+from app.config import TURN_CREDENTIAL_TTL, TURN_SECRET
 from app.services.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/v1/calls", tags=["calling"])
@@ -23,6 +24,9 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
     "call_offer", "call_answer", "call_ice_candidate",
     "call_hangup", "call_busy", "call_reject",
 })
+
+_MAX_SIGNALS_PER_MINUTE = 100
+_signal_times: dict[str, list[float]] = defaultdict(list)
 
 
 @router.post("/signal", response_model=CallSignalResponse)
@@ -34,6 +38,20 @@ async def relay_signal(
         raise HTTPException(status_code=400, detail="Invalid signal type")
     if request.recipient_id == x_user_id:
         raise HTTPException(status_code=400, detail="Cannot signal self")
+
+    # Per-user rate limit
+    now = time.monotonic()
+    times = _signal_times[x_user_id]
+    times[:] = [t for t in times if now - t < 60]
+    if len(times) >= _MAX_SIGNALS_PER_MINUTE:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    times.append(now)
+
+    # Periodically prune users with no recent signals to prevent memory leak
+    if len(_signal_times) > 1000:
+        stale = [uid for uid, ts in _signal_times.items() if not ts]
+        for uid in stale:
+            del _signal_times[uid]
     delivered = await ws_manager.relay_call_signal(
         sender_id=x_user_id,
         recipient_id=request.recipient_id,
@@ -56,20 +74,15 @@ async def get_ice_servers(
     ]
 
     relay_ip = getattr(request.app.state, "turn_relay_ip", None)
-    if relay_ip:
-        if TURN_SECRET:
-            # Ephemeral credentials (coturn --use-auth-secret compatible)
-            expiry = int(time.time()) + TURN_CREDENTIAL_TTL
-            username = f"{expiry}:{user_id}"
-            credential = base64.b64encode(
-                hmac.new(
-                    TURN_SECRET.encode(), username.encode(), hashlib.sha1
-                ).digest()
-            ).decode()
-        else:
-            # Legacy static credentials (development only)
-            username = TURN_USERNAME
-            credential = TURN_PASSWORD
+    if relay_ip and TURN_SECRET:
+        # Ephemeral credentials (coturn --use-auth-secret compatible)
+        expiry = int(time.time()) + TURN_CREDENTIAL_TTL
+        username = f"{expiry}:{user_id}"
+        credential = base64.b64encode(
+            hmac.new(
+                TURN_SECRET.encode(), username.encode(), hashlib.sha1
+            ).digest()
+        ).decode()
 
         servers.append(
             IceServer(

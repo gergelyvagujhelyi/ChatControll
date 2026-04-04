@@ -1,12 +1,11 @@
 """WebSocket connection manager for real-time message delivery.
 
 Each connected client registers with their user_id. When a new message
-arrives for a user, the server pushes a notification through the WebSocket
-in addition to (or instead of) FCM push.
+arrives for a user, the server pushes a notification through the WebSocket.
 
-Privacy note: WebSocket messages contain only a delivery signal with
-sender_id — never message content. The client then fetches and decrypts
-the envelope via the REST API.
+Privacy note: WebSocket messages contain only a generic delivery signal —
+never message content or sender identity. The client then fetches and
+decrypts the envelope via the REST API.
 """
 
 import asyncio
@@ -77,7 +76,6 @@ class WebSocketManager:
 
         payload = json.dumps({
             "type": "new_message",
-            "sender_id": sender_id,
         })
 
         notified = False
