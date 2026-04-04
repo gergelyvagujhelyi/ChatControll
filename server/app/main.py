@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ChatControll Relay",
     description="Privacy-first encrypted message relay server.",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
     # Disable docs in production
     docs_url="/docs" if DEBUG else None,
@@ -142,6 +142,6 @@ async def health_check() -> HealthResponse:
     except Exception:
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "version": "0.1.0", "detail": "Database unreachable"},
+            content={"status": "unhealthy", "version": "0.2.0", "detail": "Database unreachable"},
         )
     return HealthResponse()
