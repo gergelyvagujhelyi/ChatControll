@@ -39,6 +39,9 @@ class MessageRepositoryImpl @Inject constructor(
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
     private val headerJson = Json { ignoreUnknownKeys = true }
 
+    /** Track consecutive decrypt failures per message to avoid infinite retry. */
+    private val decryptFailCounts = mutableMapOf<String, Int>()
+
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
             entities.map { it.toDomain(keyManager.getUserId() ?: "") }
@@ -185,10 +188,20 @@ class MessageRepositoryImpl @Inject constructor(
             )
 
             val plaintext = try {
-                cryptoEngine.decrypt(sessionKeys, envelope)
+                val result = cryptoEngine.decrypt(sessionKeys, envelope)
+                decryptFailCounts.remove(dto.messageId)
+                result
             } catch (e: Exception) {
                 android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
-                continue // Skip messages we can't decrypt
+                val failures = (decryptFailCounts[dto.messageId] ?: 0) + 1
+                decryptFailCounts[dto.messageId] = failures
+                if (failures >= MAX_DECRYPT_RETRIES) {
+                    // Permanently failed — acknowledge to unblock the queue
+                    android.util.Log.w("MessageRepo", "Giving up on message ${dto.messageId} after $failures attempts")
+                    receivedIds.add(dto.messageId)
+                    decryptFailCounts.remove(dto.messageId)
+                }
+                continue
             }
 
             val conversationId = getOrCreateConversationId(dto.senderId)
@@ -289,6 +302,12 @@ class MessageRepositoryImpl @Inject constructor(
             )
         )
         return id
+    }
+
+    companion object {
+        /** After this many failed decrypt attempts, acknowledge the message to
+         *  prevent it from poisoning the pending queue forever. */
+        private const val MAX_DECRYPT_RETRIES = 3
     }
 
     private suspend fun updateConversationPreview(

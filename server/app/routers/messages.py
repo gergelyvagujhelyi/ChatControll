@@ -55,11 +55,12 @@ async def send_message(
     if not await check_rate_limit(db, x_user_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    # Verify recipient exists
-    recipient_check = await db.execute(
+    # Verify recipient exists (keep result for FCM token later)
+    recipient_result = await db.execute(
         select(Identity).where(Identity.user_id == request.recipient_id)
     )
-    if recipient_check.scalar_one_or_none() is None:
+    recipient = recipient_result.scalar_one_or_none()
+    if recipient is None:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
     # Check pending queue depth
@@ -100,11 +101,7 @@ async def send_message(
 
     # FCM push if recipient is not connected via WebSocket
     if not ws_delivered:
-        result = await db.execute(
-            select(Identity).where(Identity.user_id == request.recipient_id)
-        )
-        recipient = result.scalar_one_or_none()
-        if recipient and recipient.fcm_token:
+        if recipient.fcm_token:
             await send_push_notification(
                 fcm_token=recipient.fcm_token,
                 sender_id=x_user_id,

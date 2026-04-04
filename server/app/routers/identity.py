@@ -10,6 +10,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -52,8 +53,12 @@ async def bootstrap_identity(
         share_code=share_code,
         fcm_token=request.fcm_token,
     )
-    db.add(identity)
-    await db.commit()
+    try:
+        db.add(identity)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Identity collision — retry")
 
     return BootstrapResponse(user_id=user_id, share_code=share_code)
 

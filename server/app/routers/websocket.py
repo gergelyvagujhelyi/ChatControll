@@ -16,7 +16,10 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
 
+from app.database import async_session
+from app.models.db import Identity
 from app.services.websocket_manager import ws_manager
 
 router = APIRouter(tags=["websocket"])
@@ -49,6 +52,19 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             return
 
         user_id = msg["user_id"]
+
+        # Verify identity exists in the database
+        async with async_session() as db:
+            result = await db.execute(
+                select(Identity.user_id).where(Identity.user_id == user_id)
+            )
+            if result.scalar_one_or_none() is None:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Unknown identity"})
+                )
+                await websocket.close(code=4003)
+                return
+
         # Register with the manager (accept was already called above)
         await ws_manager.register(user_id, websocket)
         logger.info("WebSocket authenticated: %s", user_id[:8])

@@ -57,7 +57,7 @@ class AckRequest(BaseModel):
 
 
 class PushTokenRequest(BaseModel):
-    token: str
+    token: str = Field(..., max_length=4096)
     platform: str = "android"
 
 

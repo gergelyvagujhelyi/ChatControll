@@ -190,9 +190,22 @@ class RatchetSessionManager @Inject constructor(
             val headerJson = String(envelope.nonce, Charsets.UTF_8)
             val header = json.decodeFromString<RatchetHeader>(headerJson)
 
-            val plaintext = ratchet.decrypt(state, header, envelope.ciphertext)
-            persistSession(sessionKeys.sessionId, state)
-            plaintext
+            try {
+                val plaintext = ratchet.decrypt(state, header, envelope.ciphertext)
+                persistSession(sessionKeys.sessionId, state)
+                plaintext
+            } catch (e: Exception) {
+                // ratchet.decrypt() mutates state in-place (DH ratchet step, skip keys)
+                // before AES-GCM decryption. If decryption fails, the in-memory state
+                // is now out of sync. Reload from persisted state to undo the damage.
+                val restored = loadPersistedSession(sessionKeys.sessionId)
+                if (restored != null) {
+                    sessions[sessionKeys.sessionId] = restored
+                } else {
+                    sessions.remove(sessionKeys.sessionId)
+                }
+                throw e
+            }
         }
     }
 
