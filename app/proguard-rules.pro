@@ -34,3 +34,7 @@
 # Bouncy Castle - algorithms loaded via JCA reflection (Ed25519, X25519, ML-KEM)
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
+
+# WebRTC - native JNI callbacks require all classes to remain unobfuscated
+-keep class org.webrtc.** { *; }
+-dontwarn org.webrtc.**
