@@ -8,6 +8,7 @@ The server stores only what it must to route encrypted envelopes:
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
     Index,
@@ -52,7 +53,7 @@ class PendingMessage(Base):
     encrypted_body = Column(Text, nullable=False)
     nonce = Column(Text, nullable=False)
     ephemeral_public_key = Column(Text, nullable=False, default="")
-    timestamp_ms = Column(Integer, nullable=True)
+    timestamp_ms = Column(BigInteger, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
 
