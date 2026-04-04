@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 @HiltViewModel
@@ -29,8 +31,13 @@ class SettingsViewModel @Inject constructor(
     private val _shareCode = MutableStateFlow<String?>(null)
     val shareCode: StateFlow<String?> = _shareCode.asStateFlow()
 
+    private val settingsMutex = Mutex()
+
     private val _showWipeConfirmation = MutableStateFlow(false)
     val showWipeConfirmation: StateFlow<Boolean> = _showWipeConfirmation.asStateFlow()
+
+    private val _wipeCompleted = MutableStateFlow(false)
+    val wipeCompleted: StateFlow<Boolean> = _wipeCompleted.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -41,33 +48,41 @@ class SettingsViewModel @Inject constructor(
 
     fun updateLockScreenPreview(mode: LockScreenPreviewMode) {
         viewModelScope.launch {
-            settingsRepository.updatePrivacySettings(
-                privacySettings.value.copy(lockScreenPreview = mode),
-            )
+            settingsMutex.withLock {
+                settingsRepository.updatePrivacySettings(
+                    privacySettings.value.copy(lockScreenPreview = mode),
+                )
+            }
         }
     }
 
     fun updateReadReceipts(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.updatePrivacySettings(
-                privacySettings.value.copy(readReceipts = enabled),
-            )
+            settingsMutex.withLock {
+                settingsRepository.updatePrivacySettings(
+                    privacySettings.value.copy(readReceipts = enabled),
+                )
+            }
         }
     }
 
     fun updateScreenSecurity(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.updatePrivacySettings(
-                privacySettings.value.copy(screenSecurity = enabled),
-            )
+            settingsMutex.withLock {
+                settingsRepository.updatePrivacySettings(
+                    privacySettings.value.copy(screenSecurity = enabled),
+                )
+            }
         }
     }
 
     fun updateDisappearingMessages(duration: DisappearingDuration) {
         viewModelScope.launch {
-            settingsRepository.updatePrivacySettings(
-                privacySettings.value.copy(disappearingMessagesDefault = duration),
-            )
+            settingsMutex.withLock {
+                settingsRepository.updatePrivacySettings(
+                    privacySettings.value.copy(disappearingMessagesDefault = duration),
+                )
+            }
         }
     }
 
@@ -83,6 +98,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.wipeLocalData()
             _showWipeConfirmation.value = false
+            _wipeCompleted.value = true
         }
     }
 }

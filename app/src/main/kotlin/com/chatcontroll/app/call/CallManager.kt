@@ -14,15 +14,20 @@ import com.chatcontroll.app.data.remote.dto.CallSignalRequest
 import com.chatcontroll.app.domain.model.CallDirection
 import com.chatcontroll.app.domain.model.CallState
 import com.chatcontroll.app.domain.model.CallStatus
-import com.chatcontroll.app.domain.repository.CryptoEngine
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -36,7 +41,6 @@ import javax.inject.Singleton
 class CallManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val apiService: ApiService,
-    private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
     private val webSocketClient: WebSocketClient,
 ) {
@@ -59,6 +63,7 @@ class CallManager @Inject constructor(
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
     private val pendingIceCandidates = mutableListOf<IceCandidateDto>()
+    private var remoteDescriptionSet = false
 
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
@@ -144,6 +149,7 @@ class CallManager @Inject constructor(
                 val answerSdp = webRtcEngine!!.handleRemoteOffer(sdpPayload.sdp)
                 Log.d(TAG, "Created answer SDP, length=${answerSdp.length}")
 
+                remoteDescriptionSet = true
                 Log.d(TAG, "Applying ${pendingIceCandidates.size} pending ICE candidates")
                 for (candidate in pendingIceCandidates) {
                     webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
@@ -181,14 +187,14 @@ class CallManager @Inject constructor(
         val state = _callState.value ?: return
         val newMuted = !state.isMuted
         webRtcEngine?.setMicEnabled(!newMuted)
-        _callState.value = state.copy(isMuted = newMuted)
+        _callState.update { it?.copy(isMuted = newMuted) }
     }
 
     fun toggleSpeaker() {
         val state = _callState.value ?: return
         val newSpeaker = !state.isSpeakerOn
         audioManager.isSpeakerphoneOn = newSpeaker
-        _callState.value = state.copy(isSpeakerOn = newSpeaker)
+        _callState.update { it?.copy(isSpeakerOn = newSpeaker) }
     }
 
     private var _pendingOfferPayload: String? = null
@@ -201,6 +207,7 @@ class CallManager @Inject constructor(
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
         webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
 
+        remoteDescriptionSet = true
         // Apply ICE candidates that arrived before the answer
         for (candidate in pendingIceCandidates) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
@@ -214,7 +221,7 @@ class CallManager @Inject constructor(
         val candidateJson = decryptPayload(signal.senderId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
-        if (webRtcEngine?.let { true } == true && _callState.value?.status != CallStatus.RINGING) {
+        if (webRtcEngine != null && remoteDescriptionSet) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
         } else {
             pendingIceCandidates.add(candidate)
@@ -227,11 +234,19 @@ class CallManager @Inject constructor(
 
     private fun endCall(status: CallStatus) {
         _callState.value = _callState.value?.copy(status = status)
-        webRtcEngine?.dispose()
+        val engine = webRtcEngine
         webRtcEngine = null
         _pendingOfferPayload = null
         pendingIceCandidates.clear()
+        remoteDescriptionSet = false
         abandonAudioFocus()
+
+        // Dispose WebRTC resources off the main thread to avoid ANR
+        if (engine != null) {
+            scope.launch(Dispatchers.Default) {
+                engine.dispose()
+            }
+        }
 
         // Clear state after a short delay so UI can show the end status
         scope.launch {
@@ -269,14 +284,15 @@ class CallManager @Inject constructor(
         }
 
         webRtcEngine?.onConnectionStateChange = lambda@{ iceState ->
-            val state = _callState.value ?: return@lambda
             when (iceState) {
                 PeerConnection.IceConnectionState.CONNECTED,
                 PeerConnection.IceConnectionState.COMPLETED -> {
-                    _callState.value = state.copy(
-                        status = CallStatus.CONNECTED,
-                        connectedAt = System.currentTimeMillis(),
-                    )
+                    _callState.update { state ->
+                        state?.copy(
+                            status = CallStatus.CONNECTED,
+                            connectedAt = System.currentTimeMillis(),
+                        )
+                    }
                 }
                 PeerConnection.IceConnectionState.FAILED -> {
                     endCall(CallStatus.FAILED)
@@ -305,39 +321,34 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun encryptPayload(peerId: String, plaintext: String): String {
+    /**
+     * Encrypt call signals using AES-256-GCM with the static session sendKey.
+     * This intentionally bypasses the Double Ratchet to avoid advancing the
+     * message chain — call signals are ephemeral and may be lost/reordered.
+     */
+    private fun encryptPayload(peerId: String, plaintext: String): String {
         val sessionKeys = keyManager.getCachedSessionKeys(peerId)
-        if (sessionKeys == null) {
-            Log.w(TAG, "No session keys for $peerId, falling back to base64")
-            return Base64.encodeToString(plaintext.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-        }
-        val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
-        // Pack as: nonce_b64.ciphertext_b64
-        val nonceB64 = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP)
-        val ctB64 = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP)
+            ?: throw IllegalStateException("No session keys for $peerId — cannot encrypt call signal")
+        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(sessionKeys.sendKey, "AES"), GCMParameterSpec(128, nonce))
+        val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        val nonceB64 = Base64.encodeToString(nonce, Base64.NO_WRAP)
+        val ctB64 = Base64.encodeToString(ciphertext, Base64.NO_WRAP)
         return "$nonceB64.$ctB64"
     }
 
-    private suspend fun decryptPayload(peerId: String, encrypted: String): String {
+    private fun decryptPayload(peerId: String, encrypted: String): String {
         if (encrypted.isEmpty()) return ""
-        if (!encrypted.contains('.')) {
-            // Legacy base64-only payload (no session keys on sender side)
-            return String(Base64.decode(encrypted, Base64.NO_WRAP), Charsets.UTF_8)
-        }
         val sessionKeys = keyManager.getCachedSessionKeys(peerId)
-        if (sessionKeys == null) {
-            Log.w(TAG, "No session keys for $peerId, cannot decrypt signal")
-            // Try as plain base64 fallback
-            return try {
-                String(Base64.decode(encrypted.substringAfter('.'), Base64.NO_WRAP), Charsets.UTF_8)
-            } catch (_: Exception) { "" }
-        }
+            ?: throw IllegalStateException("No session keys for $peerId — cannot decrypt call signal")
+        require(encrypted.contains('.')) { "Invalid encrypted payload format" }
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
-        val envelope = com.chatcontroll.app.domain.repository.EncryptedEnvelope(ciphertext, nonce)
-        val plainBytes = cryptoEngine.decrypt(sessionKeys, envelope)
-        return String(plainBytes, Charsets.UTF_8)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(sessionKeys.receiveKey, "AES"), GCMParameterSpec(128, nonce))
+        return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
     }
 
     private fun requestAudioFocus() {

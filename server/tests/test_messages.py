@@ -5,18 +5,31 @@ import base64
 import pytest
 from httpx import AsyncClient
 
+from tests.auth_helpers import generate_ed25519_keypair, make_auth_header
+
 
 async def _bootstrap_user(client: AsyncClient, label: str) -> dict:
-    """Helper to create a test user."""
+    """Helper to create a test user with real Ed25519 keys.
+
+    Returns dict with 'user_id', 'private_key', and auth helper.
+    """
+    private_key, pub_key_b64 = generate_ed25519_keypair()
     resp = await client.post(
         "/v1/identity/bootstrap",
         json={
-            "public_signing_key": base64.b64encode(f"sign_{label}".encode()).decode(),
+            "public_signing_key": pub_key_b64,
             "public_identity_key": base64.b64encode(f"id_{label}_padding!".encode()).decode(),
             "pqc_encapsulation_key": "",
         },
     )
-    return resp.json()
+    data = resp.json()
+    data["private_key"] = private_key
+    return data
+
+
+def _auth(user: dict) -> dict:
+    """Shorthand to build auth headers for a bootstrapped user."""
+    return make_auth_header(user["private_key"], user["user_id"])
 
 
 @pytest.mark.asyncio
@@ -33,7 +46,7 @@ async def test_send_and_fetch_message(client: AsyncClient):
             "encrypted_body": base64.b64encode(b"encrypted_hello").decode(),
             "nonce": base64.b64encode(b"nonce_12byte").decode(),
         },
-        headers={"X-User-Id": alice["user_id"]},
+        headers=_auth(alice),
     )
     assert send_resp.status_code == 200
     msg_data = send_resp.json()
@@ -43,7 +56,7 @@ async def test_send_and_fetch_message(client: AsyncClient):
     # Bob fetches pending messages
     fetch_resp = await client.get(
         "/v1/messages/pending",
-        headers={"X-User-Id": bob["user_id"]},
+        headers=_auth(bob),
     )
     assert fetch_resp.status_code == 200
     messages = fetch_resp.json()
@@ -67,7 +80,7 @@ async def test_ack_deletes_messages(client: AsyncClient):
             "encrypted_body": "encrypted",
             "nonce": "nonce",
         },
-        headers={"X-User-Id": alice["user_id"]},
+        headers=_auth(alice),
     )
     message_id = send_resp.json()["message_id"]
 
@@ -75,14 +88,14 @@ async def test_ack_deletes_messages(client: AsyncClient):
     ack_resp = await client.post(
         "/v1/messages/ack",
         json={"message_ids": [message_id]},
-        headers={"X-User-Id": bob["user_id"]},
+        headers=_auth(bob),
     )
     assert ack_resp.status_code == 200
 
     # Fetch again — should be empty
     fetch_resp = await client.get(
         "/v1/messages/pending",
-        headers={"X-User-Id": bob["user_id"]},
+        headers=_auth(bob),
     )
     assert fetch_resp.json() == []
 
@@ -93,7 +106,7 @@ async def test_fetch_pending_empty(client: AsyncClient):
     user = await _bootstrap_user(client, "lonely")
     resp = await client.get(
         "/v1/messages/pending",
-        headers={"X-User-Id": user["user_id"]},
+        headers=_auth(user),
     )
     assert resp.status_code == 200
     assert resp.json() == []
@@ -113,12 +126,12 @@ async def test_multiple_messages_ordered(client: AsyncClient):
                 "encrypted_body": f"msg_{i}",
                 "nonce": f"nonce_{i}",
             },
-            headers={"X-User-Id": alice["user_id"]},
+            headers=_auth(alice),
         )
 
     resp = await client.get(
         "/v1/messages/pending",
-        headers={"X-User-Id": bob["user_id"]},
+        headers=_auth(bob),
     )
     messages = resp.json()
     assert len(messages) == 3

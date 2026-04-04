@@ -15,6 +15,7 @@ import com.chatcontroll.app.data.remote.dto.ResolveShareCodeResponse
 import com.chatcontroll.app.data.remote.dto.SendMessageRequest
 import com.chatcontroll.app.data.remote.dto.SendMessageResponse
 import io.ktor.client.HttpClient
+import android.util.Base64
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -40,15 +41,17 @@ import javax.inject.Singleton
 /**
  * Production API client that communicates with the Python FastAPI relay server.
  *
- * All requests include the X-User-Id header for routing.
- * No authentication tokens are used — the server trusts the user_id header.
- * In production, add HMAC-signed request authentication.
+ * Authenticated requests include an Authorization header with a signed token:
+ * ``Bearer <user_id>.<timestamp_ms>.<signature_b64>``
+ *
+ * The server verifies the Ed25519 signature against the public signing key
+ * stored at bootstrap, proving the caller holds the private key.
  */
 @OptIn(ExperimentalSerializationApi::class)
 @Singleton
 class KtorApiService @Inject constructor(
     private val keyManager: KeyManager,
-) : ApiService {
+) : ApiService, java.io.Closeable {
 
     private val client = HttpClient(OkHttp) {
         engine {
@@ -74,8 +77,24 @@ class KtorApiService @Inject constructor(
         }
     }
 
+    override fun close() {
+        client.close()
+    }
+
     private fun userId(): String =
         keyManager.getUserId() ?: throw IllegalStateException("No identity — bootstrap first")
+
+    /**
+     * Generate a signed auth token: ``<user_id>.<timestamp_ms>.<signature_b64>``
+     */
+    private fun authToken(): String {
+        val uid = userId()
+        val ts = System.currentTimeMillis().toString()
+        val payload = "$uid.$ts"
+        val signature = keyManager.sign(payload.toByteArray(Charsets.UTF_8))
+        val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
+        return "$payload.$sigB64"
+    }
 
     override suspend fun bootstrapIdentity(request: BootstrapRequest): BootstrapResponse {
         val response: HttpResponse = client.post("/v1/identity/bootstrap") {
@@ -87,7 +106,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun fetchKeyBundle(userId: String): KeyBundleDto? {
         val response: HttpResponse = client.get("/v1/identity/$userId/keys") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
         }
         if (response.status.value == 404) return null
         check(response.status.isSuccess()) { "Fetch key bundle failed: ${response.status}" }
@@ -96,7 +115,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun resolveShareCode(shareCode: String): ResolveShareCodeResponse? {
         val response: HttpResponse = client.get("/v1/identity/resolve/$shareCode") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
         }
         if (response.status.value == 404) return null
         check(response.status.isSuccess()) { "Resolve share code failed: ${response.status}" }
@@ -105,7 +124,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun sendMessage(request: SendMessageRequest): SendMessageResponse {
         val response: HttpResponse = client.post("/v1/messages/send") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
             setBody(request)
         }
         check(response.status.isSuccess()) { "Send message failed: ${response.status}" }
@@ -114,7 +133,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun fetchPendingMessages(): List<PendingMessageDto> {
         val response: HttpResponse = client.get("/v1/messages/pending") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
         }
         check(response.status.isSuccess()) { "Fetch pending failed: ${response.status}" }
         return response.body()
@@ -122,7 +141,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun acknowledgeMessages(request: AckRequest) {
         val response: HttpResponse = client.post("/v1/messages/ack") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
             setBody(request)
         }
         check(response.status.isSuccess()) { "ACK failed: ${response.status}" }
@@ -130,7 +149,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun registerPushToken(request: PushTokenRequest) {
         val response: HttpResponse = client.post("/v1/push/register") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
             setBody(request)
         }
         check(response.status.isSuccess()) { "Register push token failed: ${response.status}" }
@@ -138,14 +157,14 @@ class KtorApiService @Inject constructor(
 
     override suspend fun unregisterPushToken() {
         val response: HttpResponse = client.delete("/v1/push/register") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
         }
         check(response.status.isSuccess()) { "Unregister push token failed: ${response.status}" }
     }
 
     override suspend fun sendCallSignal(request: CallSignalRequest): CallSignalResponse {
         val response: HttpResponse = client.post("/v1/calls/signal") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
             setBody(request)
         }
         check(response.status.isSuccess()) { "Call signal failed: ${response.status}" }
@@ -154,7 +173,7 @@ class KtorApiService @Inject constructor(
 
     override suspend fun getIceServers(): IceServersResponse {
         val response: HttpResponse = client.get("/v1/calls/ice-servers") {
-            header("X-User-Id", userId())
+            header("Authorization", "Bearer ${authToken()}")
         }
         check(response.status.isSuccess()) { "Get ICE servers failed: ${response.status}" }
         return response.body()

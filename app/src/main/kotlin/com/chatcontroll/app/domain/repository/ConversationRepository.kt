@@ -7,5 +7,6 @@ interface ConversationRepository {
     fun getConversations(): Flow<List<Conversation>>
     fun getConversation(conversationId: String): Flow<Conversation?>
     suspend fun getOrCreateConversation(contactId: String): String
+    suspend fun clearUnread(conversationId: String)
     suspend fun deleteConversation(conversationId: String)
 }

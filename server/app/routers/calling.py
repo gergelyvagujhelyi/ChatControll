@@ -1,7 +1,8 @@
 """REST endpoints for voice call signaling and ICE server configuration."""
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Request
 
+from app.auth import verify_auth_token
 from app.models.schemas import (
     CallSignalRequest,
     CallSignalResponse,
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/v1/calls", tags=["calling"])
 @router.post("/signal", response_model=CallSignalResponse)
 async def relay_signal(
     request: CallSignalRequest,
-    x_user_id: str = Header(...),
+    x_user_id: str = Depends(verify_auth_token),
 ) -> CallSignalResponse:
     delivered = await ws_manager.relay_call_signal(
         sender_id=x_user_id,
@@ -30,7 +31,10 @@ async def relay_signal(
 
 
 @router.get("/ice-servers", response_model=IceServersResponse)
-async def get_ice_servers(request: Request) -> IceServersResponse:
+async def get_ice_servers(
+    request: Request,
+    _user_id: str = Depends(verify_auth_token),
+) -> IceServersResponse:
     """Return ICE server configuration for WebRTC calls."""
     servers = [
         IceServer(urls="stun:stun.l.google.com:19302"),

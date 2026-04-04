@@ -8,7 +8,6 @@ The server stores only what it must to route encrypted envelopes:
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean,
     Column,
     DateTime,
     Index,
@@ -36,7 +35,8 @@ class Identity(Base):
     share_code = Column(String(24), unique=True, nullable=False, index=True)
     fcm_token = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
-    last_seen_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    last_seen_at = Column(DateTime, server_default=func.now())
+
 
 
 class PendingMessage(Base):

@@ -1,22 +1,30 @@
 """WebSocket endpoint for real-time message delivery signals.
 
-Clients connect with their user_id and receive JSON notifications when
+Clients authenticate with a signed token and receive JSON notifications when
 new messages are available. Message content is never sent over WebSocket —
 only a signal to fetch from the REST API.
 
 Protocol:
-- Client sends: {"type": "auth", "user_id": "..."}
+- Client sends: {"type": "auth", "token": "<user_id>.<ts_ms>.<sig_b64>"}
+- Server sends: {"type": "auth_ok"} on success
 - Server sends: {"type": "new_message", "sender_id": "..."}
 - Client sends: {"type": "ping"} periodically
 - Server sends: {"type": "pong"}
 """
 
+import asyncio
 import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import verify_token
+from app.config import WS_IDLE_TIMEOUT_SECONDS
+from app.database import get_db
+from app.models.db import Identity
 from app.services.websocket_manager import ws_manager
 
 router = APIRouter(tags=["websocket"])
@@ -24,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 
 @router.websocket("/v1/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
+async def websocket_endpoint(
+    websocket: WebSocket,
+    db: AsyncSession = Depends(get_db),
+) -> None:
     """Handle a WebSocket connection for real-time delivery signals."""
     user_id: Optional[str] = None
 
@@ -32,30 +43,81 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         # Wait for auth message
         await websocket.accept()
         raw = await websocket.receive_text()
-        msg = json.loads(raw)
-
-        if msg.get("type") != "auth" or not msg.get("user_id"):
+        try:
+            msg = json.loads(raw)
+        except json.JSONDecodeError:
             await websocket.send_text(
-                json.dumps({"type": "error", "message": "Expected auth message"})
+                json.dumps({"type": "error", "message": "Invalid JSON"})
+            )
+            await websocket.close(code=4002)
+            return
+
+        if msg.get("type") != "auth" or not msg.get("token"):
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": "Expected auth message with token"})
             )
             await websocket.close(code=4001)
             return
 
-        user_id = msg["user_id"]
-        # Re-register with the manager (accept was already called above,
-        # so we manually add to the manager without calling accept again)
-        async with ws_manager._lock:
-            ws_manager._connections[user_id].add(websocket)
+        token = msg["token"]
+
+        # Verify signed auth token against stored public key
+        parts = token.split(".", 2)
+        if len(parts) != 3:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": "Malformed token"})
+            )
+            await websocket.close(code=4003)
+            return
+
+        claimed_user_id = parts[0]
+        result = await db.execute(
+            select(Identity.public_signing_key).where(
+                Identity.user_id == claimed_user_id
+            )
+        )
+        pub_key_b64 = result.scalar_one_or_none()
+        if pub_key_b64 is None:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": "Unknown identity"})
+            )
+            await websocket.close(code=4003)
+            return
+
+        try:
+            user_id = verify_token(token, pub_key_b64)
+        except ValueError as e:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": str(e)})
+            )
+            await websocket.close(code=4003)
+            return
+
+        # Register with the manager (accept was already called above)
+        await ws_manager.register(user_id, websocket)
         logger.info("WebSocket authenticated: %s", user_id[:8])
 
         await websocket.send_text(
             json.dumps({"type": "auth_ok"})
         )
 
-        # Keep alive loop
+        # Keep alive loop — idle connections are closed after timeout
         while True:
-            raw = await websocket.receive_text()
-            msg = json.loads(raw)
+            try:
+                raw = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=WS_IDLE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                await websocket.close(code=4008, reason="Idle timeout")
+                break
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Invalid JSON"})
+                )
+                continue
 
             msg_type = msg.get("type")
 

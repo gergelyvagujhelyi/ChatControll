@@ -10,6 +10,7 @@ import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.dao.ConversationDao
 import com.chatcontroll.app.data.local.dao.MessageDao
+import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.domain.model.DisappearingDuration
 import com.chatcontroll.app.domain.model.LockScreenPreviewMode
 import com.chatcontroll.app.domain.model.PrivacySettings
@@ -29,6 +30,7 @@ class SettingsRepositoryImpl @Inject constructor(
     private val conversationDao: ConversationDao,
     private val contactDao: ContactDao,
     private val keyManager: KeyManager,
+    private val webSocketClient: WebSocketClient,
 ) : SettingsRepository {
 
     override fun getPrivacySettings(): Flow<PrivacySettings> {
@@ -58,6 +60,8 @@ class SettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun wipeLocalData() {
+        // Disconnect WebSocket first to prevent access to wiped state
+        webSocketClient.disconnect()
         messageDao.deleteAll()
         conversationDao.deleteAll()
         contactDao.deleteAll()

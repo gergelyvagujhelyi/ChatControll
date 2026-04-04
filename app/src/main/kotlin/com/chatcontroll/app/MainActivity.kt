@@ -1,5 +1,6 @@
 package com.chatcontroll.app
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -35,9 +36,13 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var callManager: CallManager
 
+    private val _deepLinkIntent = mutableStateOf<Intent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        _deepLinkIntent.value = intent
 
         // Apply screen security by default
         lifecycleScope.launch {
@@ -54,6 +59,8 @@ class MainActivity : ComponentActivity() {
             ChatControllTheme {
                 var startDestination by remember { mutableStateOf<String?>(null) }
 
+                val navController = rememberNavController()
+
                 LaunchedEffect(Unit) {
                     startDestination = if (identityRepository.hasIdentity()) {
                         Routes.CONVERSATIONS
@@ -62,22 +69,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val navController = rememberNavController()
-
-                // Handle deep-link from notification
-                LaunchedEffect(Unit) {
-                    val conversationId = intent.getStringExtra(
+                // Handle deep-link from notification — only after NavHost is composed
+                val deepLinkIntent by _deepLinkIntent
+                LaunchedEffect(deepLinkIntent, startDestination) {
+                    if (startDestination != Routes.CONVERSATIONS) return@LaunchedEffect
+                    val currentIntent = deepLinkIntent ?: return@LaunchedEffect
+                    val conversationId = currentIntent.getStringExtra(
                         ChatNotificationManager.EXTRA_CONVERSATION_ID
                     )
-                    if (conversationId != null && startDestination == Routes.CONVERSATIONS) {
-                        // Navigate to the specific conversation
-                        navController.navigate(Routes.chat(conversationId, ""))
+                    val contactId = currentIntent.getStringExtra(
+                        ChatNotificationManager.EXTRA_CONTACT_ID
+                    )
+                    if (conversationId != null && contactId != null) {
+                        navController.navigate(Routes.chat(conversationId, contactId))
                     }
+                    _deepLinkIntent.value = null
                 }
 
                 // Navigate to CallScreen when an incoming call arrives
                 val incomingCall by callManager.callState.collectAsState()
-                LaunchedEffect(incomingCall) {
+                LaunchedEffect(incomingCall, startDestination) {
+                    if (startDestination == null) return@LaunchedEffect
                     val call = incomingCall
                     if (call != null &&
                         call.direction == CallDirection.INCOMING &&
@@ -95,5 +107,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        _deepLinkIntent.value = intent
     }
 }

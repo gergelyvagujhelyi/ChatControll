@@ -4,6 +4,7 @@ import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
 import com.chatcontroll.app.domain.repository.MessageRepository
+import android.util.Base64
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
@@ -22,8 +23,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.util.logging.Logger
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -82,15 +85,27 @@ class WebSocketClient @Inject constructor(
         reconnectDelay = INITIAL_RECONNECT_DELAY
     }
 
+    private fun generateAuthToken(): String? {
+        val uid = keyManager.getUserId() ?: return null
+        val ts = System.currentTimeMillis().toString()
+        val payload = "$uid.$ts"
+        val signature = keyManager.sign(payload.toByteArray(Charsets.UTF_8))
+        val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
+        return "$payload.$sigB64"
+    }
+
     private suspend fun connectWebSocket() {
-        val userId = keyManager.getUserId() ?: return
+        val token = generateAuthToken() ?: return
         val baseUrl = BuildConfig.API_BASE_URL
             .replace("https://", "wss://")
             .replace("http://", "ws://")
 
         client.webSocket("$baseUrl/v1/ws") {
-            // Authenticate
-            send("""{"type":"auth","user_id":"$userId"}""")
+            // Authenticate with signed token
+            send(buildJsonObject {
+                put("type", "auth")
+                put("token", token)
+            }.toString())
 
             val authResponse = (incoming.receive() as? Frame.Text)?.readText()
             val authMsg = json.parseToJsonElement(authResponse ?: "{}").jsonObject

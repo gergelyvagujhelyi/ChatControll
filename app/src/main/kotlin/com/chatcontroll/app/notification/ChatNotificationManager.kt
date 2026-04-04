@@ -74,7 +74,7 @@ class ChatNotificationManager @Inject constructor(
 
         val visibility = when (settings.lockScreenPreview) {
             LockScreenPreviewMode.SHOW_ALL -> NotificationCompat.VISIBILITY_PUBLIC
-            LockScreenPreviewMode.SENDER_ONLY -> NotificationCompat.VISIBILITY_PRIVATE
+            LockScreenPreviewMode.SENDER_ONLY -> NotificationCompat.VISIBILITY_PUBLIC
             LockScreenPreviewMode.HIDE_BODY -> NotificationCompat.VISIBILITY_PRIVATE
             LockScreenPreviewMode.HIDE_ALL -> NotificationCompat.VISIBILITY_SECRET
         }
@@ -82,6 +82,7 @@ class ChatNotificationManager @Inject constructor(
         val deepLinkIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_CONVERSATION_ID, conversationId)
+            putExtra(EXTRA_CONTACT_ID, senderId)
         }
 
         val pendingIntent = PendingIntent.getActivity(
@@ -125,5 +126,6 @@ class ChatNotificationManager @Inject constructor(
         const val CHANNEL_MESSAGES = "messages"
         const val CHANNEL_SERVICE = "background_service"
         const val EXTRA_CONVERSATION_ID = "conversation_id"
+        const val EXTRA_CONTACT_ID = "contact_id"
     }
 }

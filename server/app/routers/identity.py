@@ -9,22 +9,26 @@ import hashlib
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import verify_auth_token
 from app.database import get_db
-from app.models.db import Identity
+from app.models.db import Identity, PendingMessage, RateLimit
+from app.services.ip_rate_limiter import check_ip_rate_limit
 from app.models.schemas import (
     BootstrapRequest,
     BootstrapResponse,
     KeyBundleResponse,
+    KeyRotationRequest,
     ResolveShareCodeResponse,
 )
 
 router = APIRouter(prefix="/v1/identity", tags=["identity"])
 
 
-@router.post("/bootstrap", response_model=BootstrapResponse)
+@router.post("/bootstrap", response_model=BootstrapResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def bootstrap_identity(
     request: BootstrapRequest,
     db: AsyncSession = Depends(get_db),
@@ -52,13 +56,17 @@ async def bootstrap_identity(
         share_code=share_code,
         fcm_token=request.fcm_token,
     )
-    db.add(identity)
-    await db.commit()
+    try:
+        db.add(identity)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Identity collision — retry")
 
     return BootstrapResponse(user_id=user_id, share_code=share_code)
 
 
-@router.get("/{user_id}/keys", response_model=KeyBundleResponse)
+@router.get("/{user_id}/keys", response_model=KeyBundleResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def fetch_key_bundle(
     user_id: str,
     db: AsyncSession = Depends(get_db),
@@ -79,7 +87,7 @@ async def fetch_key_bundle(
     )
 
 
-@router.get("/resolve/{share_code}", response_model=ResolveShareCodeResponse)
+@router.get("/resolve/{share_code}", response_model=ResolveShareCodeResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def resolve_share_code(
     share_code: str,
     db: AsyncSession = Depends(get_db),
@@ -104,8 +112,65 @@ async def resolve_share_code(
     )
 
 
+@router.delete("/me")
+async def delete_identity(
+    x_user_id: str = Depends(verify_auth_token),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete the authenticated user's identity and all associated data.
+
+    Removes the identity, all pending messages (sent and received),
+    and rate-limit records. This is irreversible.
+    """
+    await db.execute(
+        delete(PendingMessage).where(
+            (PendingMessage.sender_id == x_user_id)
+            | (PendingMessage.recipient_id == x_user_id)
+        )
+    )
+    await db.execute(delete(RateLimit).where(RateLimit.user_id == x_user_id))
+    result = await db.execute(delete(Identity).where(Identity.user_id == x_user_id))
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.commit()
+    return {"status": "deleted"}
+
+
+@router.put("/me/keys")
+async def rotate_keys(
+    request: KeyRotationRequest,
+    x_user_id: str = Depends(verify_auth_token),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Rotate the authenticated user's public keys.
+
+    The request is authenticated with the *current* signing key.
+    After this call, subsequent auth tokens must be signed with the new key.
+    """
+    result = await db.execute(
+        select(Identity).where(Identity.user_id == x_user_id)
+    )
+    identity = result.scalar_one_or_none()
+    if identity is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    identity.public_signing_key = request.public_signing_key
+    identity.public_identity_key = request.public_identity_key
+    if request.pqc_encapsulation_key is not None:
+        identity.pqc_encapsulation_key = request.pqc_encapsulation_key
+
+    # Recompute share code from new identity key
+    identity.share_code = _derive_share_code(request.public_identity_key)
+
+    await db.commit()
+    return {"status": "ok", "share_code": identity.share_code}
+
+
 def _derive_share_code(public_identity_key_b64: str) -> str:
     """Derive a short, URL-safe share code from the public identity key."""
-    key_bytes = base64.b64decode(public_identity_key_b64)
+    try:
+        key_bytes = base64.b64decode(public_identity_key_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 public_identity_key")
     digest = hashlib.sha256(key_bytes).digest()
     return base64.urlsafe_b64encode(digest[:12]).decode().rstrip("=")

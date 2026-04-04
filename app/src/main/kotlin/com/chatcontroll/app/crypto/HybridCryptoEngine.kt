@@ -30,6 +30,7 @@ import javax.inject.Singleton
 class HybridCryptoEngine @Inject constructor(
     private val classicalKeyAgreement: ClassicalKeyAgreement,
     private val pqcProvider: PqcProvider,
+    private val keyManager: KeyManager,
 ) : CryptoEngine {
 
     private val secureRandom = SecureRandom()
@@ -56,26 +57,53 @@ class HybridCryptoEngine @Inject constructor(
             remotePublicKey = remotePublicBundle.publicIdentityKey,
         )
 
-        // Post-quantum KEM shared secret (if peer supports it)
-        val pqSecret = if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
-            pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey).sharedSecret
-        } else {
-            ByteArray(0)
+        // Deterministic initiator role
+        val isInitiator = localIdentity.publicIdentityKey.joinToString("") { "%02x".format(it) } <
+            remotePublicBundle.publicIdentityKey.joinToString("") { "%02x".format(it) }
+
+        // Post-quantum KEM shared secret: initiator encapsulates, responder decapsulates
+        var pqSecret = ByteArray(0)
+        if (isInitiator && remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
+            try {
+                val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
+                pqSecret = encapsulation.sharedSecret
+                // Note: ciphertext must be transmitted to the peer for decapsulation
+            } catch (_: Exception) { /* fall back to classical only */ }
+        } else if (!isInitiator && inboundKemCiphertext != null) {
+            try {
+                val dk = keyManager.getPqcDecapsulationKey()
+                if (dk != null) {
+                    pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
+                }
+            } catch (_: Exception) { /* fall back to classical only */ }
         }
 
         // Combine via HKDF
+        val ikm = if (pqSecret.isNotEmpty()) classicalSecret + pqSecret else classicalSecret
         val combinedSecret = hkdfSha256(
-            ikm = classicalSecret + pqSecret,
+            ikm = ikm,
             salt = "ChatControll-v1-session".toByteArray(),
             info = "hybrid-key-establishment".toByteArray(),
             length = 64,
         )
 
-        val sessionId = sha256Hex(localIdentity.publicIdentityKey + remotePublicBundle.publicIdentityKey)
+        // Sort keys so both peers compute the same sessionId regardless of role
+        val localHex = localIdentity.publicIdentityKey.joinToString("") { "%02x".format(it) }
+        val remoteHex = remotePublicBundle.publicIdentityKey.joinToString("") { "%02x".format(it) }
+        val orderedKeys = if (localHex < remoteHex) {
+            localIdentity.publicIdentityKey + remotePublicBundle.publicIdentityKey
+        } else {
+            remotePublicBundle.publicIdentityKey + localIdentity.publicIdentityKey
+        }
+        val sessionId = sha256Hex(orderedKeys)
+
+        // Deterministic key assignment so both sides agree
+        val keyA = combinedSecret.copyOfRange(0, 32)
+        val keyB = combinedSecret.copyOfRange(32, 64)
 
         return SessionKeys(
-            sendKey = combinedSecret.copyOfRange(0, 32),
-            receiveKey = combinedSecret.copyOfRange(32, 64),
+            sendKey = if (isInitiator) keyA else keyB,
+            receiveKey = if (isInitiator) keyB else keyA,
             sessionId = sessionId,
             pqcEstablished = pqSecret.isNotEmpty(),
         )
@@ -104,7 +132,7 @@ class HybridCryptoEngine @Inject constructor(
     }
 
     override suspend fun sign(data: ByteArray): ByteArray {
-        return classicalKeyAgreement.sign(data)
+        return keyManager.sign(data)
     }
 
     override suspend fun verify(

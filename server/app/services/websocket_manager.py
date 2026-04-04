@@ -12,37 +12,53 @@ the envelope via the REST API.
 import asyncio
 import json
 import logging
-from collections import defaultdict
-from typing import Dict, Set
+from collections import defaultdict, OrderedDict
+from typing import Dict
 
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
 
+MAX_WS_CONNECTIONS_PER_USER = 5
+
+
 class WebSocketManager:
     """Manages active WebSocket connections per user."""
 
     def __init__(self) -> None:
-        # user_id → set of active WebSocket connections
-        self._connections: Dict[str, Set[WebSocket]] = defaultdict(set)
+        # user_id → insertion-ordered dict of active WebSocket connections
+        # Using OrderedDict (instead of set) so eviction removes the oldest.
+        self._connections: Dict[str, OrderedDict[WebSocket, None]] = defaultdict(OrderedDict)
         self._lock = asyncio.Lock()
 
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
+        await self.register(user_id, websocket)
+
+    async def register(self, user_id: str, websocket: WebSocket) -> None:
+        """Register an already-accepted WebSocket, enforcing per-user cap."""
         async with self._lock:
-            self._connections[user_id].add(websocket)
+            if len(self._connections[user_id]) >= MAX_WS_CONNECTIONS_PER_USER:
+                # Evict the oldest (first-inserted) connection
+                oldest, _ = self._connections[user_id].popitem(last=False)
+                try:
+                    await oldest.close(code=4008, reason="Too many connections")
+                except Exception:
+                    pass
+            self._connections[user_id][websocket] = None
         logger.info("WebSocket connected: %s", user_id[:8])
 
     async def disconnect(self, user_id: str, websocket: WebSocket) -> None:
         async with self._lock:
-            self._connections[user_id].discard(websocket)
+            self._connections[user_id].pop(websocket, None)
             if not self._connections[user_id]:
                 del self._connections[user_id]
         logger.info("WebSocket disconnected: %s", user_id[:8])
 
     def is_online(self, user_id: str) -> bool:
-        return bool(self._connections.get(user_id))
+        # Use get() with explicit default to avoid defaultdict creating empty entries
+        return bool(self._connections.get(user_id, None))
 
     async def notify_new_message(
         self,
@@ -54,7 +70,7 @@ class WebSocketManager:
         Returns True if at least one WebSocket was notified.
         """
         async with self._lock:
-            sockets = list(self._connections.get(recipient_id, set()))
+            sockets = list(self._connections.get(recipient_id, {}))
 
         if not sockets:
             return False
@@ -75,6 +91,23 @@ class WebSocketManager:
 
         return notified
 
+    async def shutdown(self) -> None:
+        """Gracefully close all connections (called on server shutdown)."""
+        async with self._lock:
+            all_sockets = [
+                (uid, ws)
+                for uid, conns in self._connections.items()
+                for ws in conns
+            ]
+            self._connections.clear()
+
+        for uid, ws in all_sockets:
+            try:
+                await ws.close(code=1012, reason="Server shutting down")
+            except Exception:
+                pass
+        logger.info("All WebSocket connections closed for shutdown")
+
     async def relay_call_signal(
         self,
         sender_id: str,
@@ -88,7 +121,7 @@ class WebSocketManager:
         Returns True if at least one WebSocket received the signal.
         """
         async with self._lock:
-            sockets = list(self._connections.get(recipient_id, set()))
+            sockets = list(self._connections.get(recipient_id, {}))
 
         if not sockets:
             return False

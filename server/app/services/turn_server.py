@@ -198,6 +198,27 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
         logger.info("TURN server listening on port %d", TURN_PORT)
+        self._cleanup_task = asyncio.ensure_future(self._expire_allocations())
+
+    async def _expire_allocations(self) -> None:
+        """Periodically remove expired TURN allocations."""
+        while True:
+            await asyncio.sleep(30)
+            now = time.time()
+            expired = [addr for addr, alloc in self.allocations.items() if alloc.expires <= now]
+            for addr in expired:
+                alloc = self.allocations.pop(addr)
+                alloc.transport.close()
+                logger.info("TURN allocation expired for %s:%d (relay :%d)", addr[0], addr[1], alloc.relay_port)
+
+    def connection_lost(self, exc) -> None:
+        if hasattr(self, "_cleanup_task"):
+            self._cleanup_task.cancel()
+        # Clean up all relay transports
+        for alloc_addr, alloc in list(self.allocations.items()):
+            if alloc.transport:
+                alloc.transport.close()
+        self.allocations.clear()
 
     def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
         if len(data) < 4:
@@ -221,7 +242,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             if msg_type == BINDING_REQUEST:
                 self._handle_binding(txn_id, addr)
             elif msg_type == ALLOCATE_REQUEST:
-                self._handle_allocate(txn_id, attrs, addr)
+                self._handle_allocate(data, txn_id, attrs, addr)
             elif msg_type == REFRESH_REQUEST:
                 self._handle_refresh(txn_id, attrs, addr)
             elif msg_type == CREATE_PERM_REQUEST:
@@ -238,7 +259,7 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
         msg = _build_msg(BINDING_RESPONSE, txn_id, attrs, add_integrity=False)
         self.transport.sendto(msg, addr)
 
-    def _handle_allocate(self, txn_id: bytes, attrs: Dict[int, bytes], addr: Tuple[str, int]) -> None:
+    def _handle_allocate(self, data: bytes, txn_id: bytes, attrs: Dict[int, bytes], addr: Tuple[str, int]) -> None:
         # Check if already allocated
         if addr in self.allocations:
             alloc = self.allocations[addr]
@@ -260,27 +281,45 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             self.transport.sendto(msg, addr)
             return
 
+        # Verify MESSAGE-INTEGRITY
+        if not self._verify_message_integrity(data, attrs):
+            err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 4, 1) + b"Bad credentials")
+            err += _build_attr(ATTR_REALM, REALM.encode())
+            err += _build_attr(ATTR_NONCE, self._nonce.encode())
+            msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
+            self.transport.sendto(msg, addr)
+            return
+
         # Allocate a relay port
         asyncio.ensure_future(self._do_allocate(txn_id, addr))
 
     async def _do_allocate(self, txn_id: bytes, addr: Tuple[str, int]) -> None:
-        relay_port = self._next_relay_port
-        self._next_relay_port += 1
-        if self._next_relay_port > RELAY_PORT_MAX:
-            self._next_relay_port = RELAY_PORT_MIN
+        max_attempts = RELAY_PORT_MAX - RELAY_PORT_MIN + 1
+        alloc = None
 
-        # Create a placeholder allocation first
-        alloc = Allocation(addr, relay_port, None, self)  # type: ignore
+        for _ in range(max_attempts):
+            relay_port = self._next_relay_port
+            self._next_relay_port += 1
+            if self._next_relay_port > RELAY_PORT_MAX:
+                self._next_relay_port = RELAY_PORT_MIN
 
-        try:
-            loop = asyncio.get_running_loop()
-            transport, _ = await loop.create_datagram_endpoint(
-                lambda: RelayProtocol(alloc),
-                local_addr=("0.0.0.0", relay_port),
-            )
-            alloc.transport = transport
-        except OSError:
-            logger.warning("Failed to bind relay port %d", relay_port)
+            alloc = Allocation(addr, relay_port, None, self)  # type: ignore
+
+            try:
+                loop = asyncio.get_running_loop()
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: RelayProtocol(alloc),
+                    local_addr=("0.0.0.0", relay_port),
+                )
+                alloc.transport = transport
+                break
+            except OSError:
+                logger.debug("Relay port %d in use, trying next", relay_port)
+                alloc = None
+                continue
+
+        if alloc is None or alloc.transport is None:
+            logger.warning("No available relay ports in range %d-%d", RELAY_PORT_MIN, RELAY_PORT_MAX)
             err = _build_attr(ATTR_ERROR_CODE, struct.pack("!xxBB", 5, 0) + b"Server Error")
             msg = _build_msg(ALLOCATE_ERROR, txn_id, err, add_integrity=False)
             self.transport.sendto(msg, addr)
@@ -359,8 +398,35 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             return
 
         peer_ip, peer_port = _decode_xor_address(attrs[ATTR_XOR_PEER_ADDRESS], b"\x00" * 12)
+
+        # RFC 5766 §10.2: drop if peer IP has no installed permission
+        if peer_ip not in alloc.permissions:
+            logger.debug("Send indication dropped: no permission for %s", peer_ip)
+            return
+
         logger.info("Send indication: %s:%d → %s:%d (%d bytes)", addr[0], addr[1], peer_ip, peer_port, len(attrs[ATTR_DATA]))
         alloc.transport.sendto(attrs[ATTR_DATA], (peer_ip, peer_port))
+
+    def _verify_message_integrity(self, data: bytes, attrs: Dict[int, bytes]) -> bool:
+        """Verify the MESSAGE-INTEGRITY attribute using the long-term HMAC key."""
+        if ATTR_MESSAGE_INTEGRITY not in attrs:
+            return False
+        received_mac = attrs[ATTR_MESSAGE_INTEGRITY]
+        # Find where MESSAGE-INTEGRITY attribute starts in the raw data
+        offset = HEADER_SIZE
+        while offset + 4 <= len(data):
+            attr_type, attr_len = struct.unpack_from("!HH", data, offset)
+            if attr_type == ATTR_MESSAGE_INTEGRITY:
+                break
+            offset += 4 + attr_len + (4 - attr_len % 4) % 4
+        else:
+            return False
+        # Rewrite the message length in the header to cover up to MESSAGE-INTEGRITY
+        mi_len = offset - HEADER_SIZE + 4 + 20  # attr header (4) + HMAC (20)
+        modified = bytearray(data[:offset])
+        struct.pack_into("!H", modified, 2, mi_len)
+        expected_mac = hmac.new(HMAC_KEY, bytes(modified), hashlib.sha1).digest()
+        return hmac.compare_digest(expected_mac, received_mac)
 
     def _handle_channel_data(self, data: bytes, addr: Tuple[str, int]) -> None:
         alloc = self.allocations.get(addr)

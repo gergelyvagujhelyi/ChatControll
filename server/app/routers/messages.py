@@ -8,10 +8,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import verify_auth_token
 from app.config import MAX_PENDING_MESSAGES_PER_USER
 from app.database import get_db
 from app.models.db import Identity, PendingMessage
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/v1/messages", tags=["messages"])
 @router.post("/send", response_model=SendMessageResponse)
 async def send_message(
     request: SendMessageRequest,
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> SendMessageResponse:
     """Submit an encrypted envelope for relay to the recipient.
@@ -48,12 +49,20 @@ async def send_message(
     if not await check_rate_limit(db, x_user_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
+    # Verify recipient exists (keep result for FCM token later)
+    recipient_result = await db.execute(
+        select(Identity).where(Identity.user_id == request.recipient_id)
+    )
+    recipient = recipient_result.scalar_one_or_none()
+    if recipient is None:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+
     # Check pending queue depth
     count_result = await db.execute(
-        select(PendingMessage)
+        select(func.count(PendingMessage.id))
         .where(PendingMessage.recipient_id == request.recipient_id)
     )
-    pending_count = len(count_result.scalars().all())
+    pending_count = count_result.scalar_one()
     if pending_count >= MAX_PENDING_MESSAGES_PER_USER:
         raise HTTPException(
             status_code=507,
@@ -61,8 +70,9 @@ async def send_message(
         )
 
     message_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc)
-    timestamp_ms = int(now.timestamp() * 1000)
+    now_utc = datetime.now(timezone.utc)
+    timestamp_ms = int(now_utc.timestamp() * 1000)
+    now = now_utc.replace(tzinfo=None)
 
     pending = PendingMessage(
         message_id=message_id,
@@ -85,15 +95,12 @@ async def send_message(
 
     # FCM push if recipient is not connected via WebSocket
     if not ws_delivered:
-        result = await db.execute(
-            select(Identity).where(Identity.user_id == request.recipient_id)
-        )
-        recipient = result.scalar_one_or_none()
-        if recipient and recipient.fcm_token:
+        if recipient.fcm_token:
             await send_push_notification(
                 fcm_token=recipient.fcm_token,
                 sender_id=x_user_id,
-                conversation_id=x_user_id,  # Simplified; real impl would have conversation IDs
+                conversation_id=x_user_id,
+                recipient_id=request.recipient_id,
             )
 
     return SendMessageResponse(message_id=message_id, timestamp=timestamp_ms)
@@ -101,18 +108,26 @@ async def send_message(
 
 @router.get("/pending", response_model=List[PendingMessageResponse])
 async def fetch_pending_messages(
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
+    limit: int = 100,
 ) -> List[PendingMessageResponse]:
-    """Fetch all pending encrypted envelopes for the authenticated user.
+    """Fetch pending encrypted envelopes for the authenticated user.
 
     The client decrypts these locally. The envelopes remain in the database
-    until the client acknowledges receipt.
+    until the client acknowledges receipt. Use ``limit`` to paginate;
+    after ACK-ing a batch the next fetch returns the next oldest messages.
     """
+    if limit < 1:
+        limit = 1
+    elif limit > 500:
+        limit = 500
+
     result = await db.execute(
         select(PendingMessage)
         .where(PendingMessage.recipient_id == x_user_id)
         .order_by(PendingMessage.created_at.asc())
+        .limit(limit)
     )
     messages = result.scalars().all()
 
@@ -132,7 +147,7 @@ async def fetch_pending_messages(
 @router.post("/ack")
 async def acknowledge_messages(
     request: AckRequest,
-    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_user_id: str = Depends(verify_auth_token),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Acknowledge receipt of messages, allowing the server to delete them.

@@ -95,6 +95,15 @@ fun ConversationsScreen(
 }
 
 private fun Instant.formatShort(): String {
-    val local = toLocalDateTime(TimeZone.currentSystemDefault())
-    return "%02d:%02d".format(local.hour, local.minute)
+    val tz = TimeZone.currentSystemDefault()
+    val local = toLocalDateTime(tz)
+    val now = kotlinx.datetime.Clock.System.now().toLocalDateTime(tz)
+    return if (local.date == now.date) {
+        "%02d:%02d".format(local.hour, local.minute)
+    } else if (local.year == now.year) {
+        "%02d %s".format(local.dayOfMonth, local.month.name.take(3).lowercase()
+            .replaceFirstChar { it.uppercase() })
+    } else {
+        "%02d/%02d/%d".format(local.dayOfMonth, local.monthNumber, local.year)
+    }
 }

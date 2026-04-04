@@ -19,38 +19,61 @@ import logging
 import socket
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import DEBUG, TURN_ENABLED, TURN_RELAY_IP
-from app.database import engine
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, TURN_ENABLED, TURN_RELAY_IP
+from sqlalchemy import text
+
+from app.database import async_session, engine
 from app.models.db import Base
 from app.models.schemas import HealthResponse
 from app.routers import calling, identity, messages, push, websocket
+from app.services.metrics import MetricsMiddleware, metrics_endpoint
+from app.services.websocket_manager import ws_manager
 
-logging.basicConfig(
-    level=logging.DEBUG if DEBUG else logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+if DEBUG:
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+else:
+    # Structured JSON logging for production (one JSON object per line)
+    import json as _json
+
+    class _JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            return _json.dumps({
+                "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "logger": record.name,
+                "msg": record.getMessage(),
+                **({"exc": self.formatException(record.exc_info)} if record.exc_info else {}),
+            })
+
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_JsonFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[_handler])
 
 
 def _get_local_ip() -> str:
     """Get the machine's LAN IP address."""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Create database tables on startup and start TURN server."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Start services. In debug mode, auto-create tables; in production use Alembic."""
+    if DEBUG:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     turn_transport = None
     if TURN_ENABLED:
@@ -63,6 +86,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await ws_manager.shutdown()
     if turn_transport:
         turn_transport.close()
     await engine.dispose()
@@ -78,11 +102,24 @@ app = FastAPI(
     redoc_url=None,
 )
 
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject HTTP requests whose Content-Length exceeds the configured limit."""
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        return await call_next(request)
+
+
+app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(MetricsMiddleware)
+
 # CORS — restrict in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if DEBUG else [],
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_origins=["*"] if DEBUG else CORS_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -94,6 +131,17 @@ app.include_router(websocket.router)
 app.include_router(calling.router)
 
 
+app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], tags=["ops"], include_in_schema=False)
+
+
 @app.get("/health", response_model=HealthResponse, tags=["health"])
 async def health_check() -> HealthResponse:
+    try:
+        async with async_session() as db:
+            await db.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "version": "0.1.0", "detail": "Database unreachable"},
+        )
     return HealthResponse()

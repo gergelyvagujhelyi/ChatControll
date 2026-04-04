@@ -24,7 +24,7 @@ object Routes {
     fun chat(conversationId: String, contactId: String) =
         "chat/$conversationId/$contactId"
 
-    fun call(contactId: String, displayName: String) = "call/$contactId/${java.net.URLEncoder.encode(displayName, "UTF-8")}"
+    fun call(contactId: String, displayName: String) = "call/$contactId/${android.net.Uri.encode(displayName)}"
 }
 
 @Composable

@@ -39,6 +39,9 @@ class MessageRepositoryImpl @Inject constructor(
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
     private val headerJson = Json { ignoreUnknownKeys = true }
 
+    /** Track consecutive decrypt failures per message to avoid infinite retry. */
+    private val decryptFailCounts = mutableMapOf<String, Int>()
+
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
             entities.map { it.toDomain(keyManager.getUserId() ?: "") }
@@ -111,8 +114,32 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun retryFailed(messageId: String) {
+        val entity = messageDao.getById(messageId) ?: return
+        val plaintext = entity.plaintext ?: return // Cannot retry without plaintext
         messageDao.updateState(messageId, MessageState.SENDING.name)
-        // Re-send logic would go through WorkManager in production
+
+        try {
+            // Re-encrypt with current ratchet state instead of sending stale ciphertext
+            var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
+            if (sessionKeys == null) {
+                sessionKeys = tryEstablishSession(entity.recipientId)
+                    ?: throw IllegalStateException("No session for retry")
+            }
+
+            val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
+
+            val response = apiService.sendMessage(
+                SendMessageRequest(
+                    recipientId = entity.recipientId,
+                    encryptedBody = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP),
+                    nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
+                )
+            )
+            messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
+        } catch (e: Exception) {
+            messageDao.updateState(messageId, MessageState.FAILED.name)
+            throw e
+        }
     }
 
     override suspend fun deleteMessage(messageId: String) {
@@ -161,10 +188,20 @@ class MessageRepositoryImpl @Inject constructor(
             )
 
             val plaintext = try {
-                cryptoEngine.decrypt(sessionKeys, envelope)
+                val result = cryptoEngine.decrypt(sessionKeys, envelope)
+                decryptFailCounts.remove(dto.messageId)
+                result
             } catch (e: Exception) {
                 android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
-                continue // Skip messages we can't decrypt
+                val failures = (decryptFailCounts[dto.messageId] ?: 0) + 1
+                decryptFailCounts[dto.messageId] = failures
+                if (failures >= MAX_DECRYPT_RETRIES) {
+                    // Permanently failed — acknowledge to unblock the queue
+                    android.util.Log.w("MessageRepo", "Giving up on message ${dto.messageId} after $failures attempts")
+                    receivedIds.add(dto.messageId)
+                    decryptFailCounts.remove(dto.messageId)
+                }
+                continue
             }
 
             val conversationId = getOrCreateConversationId(dto.senderId)
@@ -265,6 +302,12 @@ class MessageRepositoryImpl @Inject constructor(
             )
         )
         return id
+    }
+
+    companion object {
+        /** After this many failed decrypt attempts, acknowledge the message to
+         *  prevent it from poisoning the pending queue forever. */
+        private const val MAX_DECRYPT_RETRIES = 3
     }
 
     private suspend fun updateConversationPreview(

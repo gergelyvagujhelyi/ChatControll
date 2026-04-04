@@ -27,7 +27,15 @@ class SyncWorker @AssistedInject constructor(
 
             Result.success()
         } catch (_: Exception) {
-            Result.retry()
+            if (runAttemptCount < MAX_RETRIES) {
+                Result.retry()
+            } else {
+                Result.failure()
+            }
         }
+    }
+
+    companion object {
+        const val MAX_RETRIES = 5
     }
 }
