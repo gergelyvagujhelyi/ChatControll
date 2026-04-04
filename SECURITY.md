@@ -90,8 +90,8 @@ The FCM push token is tied to the device's Google account. A sophisticated adver
 - Use a push proxy service that breaks the direct link (future)
 - Support alternative push mechanisms (UnifiedPush, WebSocket fallback)
 
-### No Message Authentication (v1)
-Messages are encrypted but not signed in v1. A compromised relay server could potentially inject messages. Mitigation: add Ed25519 signatures to message envelopes (the signing infrastructure is already in place).
+### Message Authentication (v0.3.0+)
+Messages are signed with Ed25519 before sending. The recipient verifies the signature against the sender's stored public signing key before decryption. Messages from older clients without signatures are still accepted for backward compatibility.
 
 ### Certificate Pinning
 Network security config includes placeholder for certificate pinning. Pins must be populated with the actual relay server certificate hashes before production deployment.
@@ -114,8 +114,12 @@ Network security config includes placeholder for certificate pinning. Pins must 
 - [x] Double Ratchet for forward secrecy
 - [x] Real relay server (Python/FastAPI) with rate limiting
 - [x] WebSocket real-time delivery
-- [ ] Message signatures (Ed25519) — infrastructure ready, not yet wired
-- [ ] Signed request authentication (prevent X-User-Id spoofing)
+- [x] Message signatures (Ed25519) — sender signs, recipient verifies
+- [x] Signed request authentication (Ed25519 token-based, prevents spoofing)
+- [x] Ephemeral TURN credentials (HMAC-based, per-session)
+- [x] Metrics endpoint authentication (bearer token)
+- [x] WebSocket call signal validation and rate limiting
+- [x] Debug logging gated behind BuildConfig.DEBUG
 - [ ] Ratchet state persistence (survive app restart)
 - [ ] Push proxy to break FCM linkability
 - [ ] Key rotation protocol

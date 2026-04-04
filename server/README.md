@@ -58,10 +58,25 @@ pytest -v
 | POST | `/v1/messages/ack` | Acknowledge receipt |
 | POST | `/v1/push/register` | Register FCM token |
 | DELETE | `/v1/push/register` | Unregister FCM token |
-| WS | `/v1/ws` | Real-time delivery WebSocket |
+| POST | `/v1/calls/signal` | Relay call signal to peer |
+| GET | `/v1/calls/ice-servers` | Get ICE/TURN server config |
+| WS | `/v1/ws` | Real-time delivery + call signaling |
 | GET | `/health` | Health check |
+| GET | `/metrics` | Prometheus metrics (token-protected) |
 
-All message endpoints require `X-User-Id` header.
+All authenticated endpoints require `Authorization: Bearer <user_id>.<timestamp_ms>.<ed25519_signature>` header.
+
+## Production Deployment
+
+```bash
+# Configure .env with production values (see .env.example)
+# Then:
+docker compose up -d --build
+```
+
+This starts PostgreSQL + the app server + nginx with TLS. Alembic migrations run automatically on container start.
+
+See `.env.example` for all configuration options including `TURN_SECRET`, `METRICS_TOKEN`, and TLS certificate paths.
 
 ## Database
 
@@ -72,4 +87,8 @@ Default: SQLite (for development). Switch to PostgreSQL by changing
 DATABASE_URL=postgresql+asyncpg://user:password@localhost/chatcontroll
 ```
 
-Tables are auto-created on startup.
+Tables are auto-created in debug mode. In production, use Alembic migrations:
+
+```bash
+alembic upgrade head
+```
