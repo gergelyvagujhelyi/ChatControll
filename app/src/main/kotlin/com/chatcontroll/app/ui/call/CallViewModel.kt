@@ -2,11 +2,11 @@ package com.chatcontroll.app.ui.call
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import android.net.Uri
 import com.chatcontroll.app.call.CallManager
 import com.chatcontroll.app.domain.model.CallState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
-import java.net.URLDecoder
 import javax.inject.Inject
 
 @HiltViewModel
@@ -22,7 +22,7 @@ class CallViewModel @Inject constructor(
         if (callManager.callState.value == null) {
             val contactId: String = savedStateHandle["contactId"] ?: ""
             val rawName: String? = savedStateHandle["displayName"]
-            val displayName = rawName?.let { URLDecoder.decode(it, "UTF-8") } ?: contactId.take(8)
+            val displayName = rawName?.let { Uri.decode(it) } ?: contactId.take(8)
             if (contactId.isNotEmpty()) {
                 callManager.initiateCall(contactId, displayName)
             }

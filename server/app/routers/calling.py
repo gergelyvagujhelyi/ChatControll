@@ -1,7 +1,11 @@
 """REST endpoints for voice call signaling and ICE server configuration."""
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
+from app.models.db import Identity
 from app.models.schemas import (
     CallSignalRequest,
     CallSignalResponse,
@@ -17,8 +21,16 @@ router = APIRouter(prefix="/v1/calls", tags=["calling"])
 @router.post("/signal", response_model=CallSignalResponse)
 async def relay_signal(
     request: CallSignalRequest,
-    x_user_id: str = Header(...),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    db: AsyncSession = Depends(get_db),
 ) -> CallSignalResponse:
+    # Verify sender is a registered identity
+    sender_result = await db.execute(
+        select(Identity).where(Identity.user_id == x_user_id)
+    )
+    if sender_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Unknown sender identity")
+
     delivered = await ws_manager.relay_call_signal(
         sender_id=x_user_id,
         recipient_id=request.recipient_id,

@@ -398,6 +398,12 @@ class TurnServerProtocol(asyncio.DatagramProtocol):
             return
 
         peer_ip, peer_port = _decode_xor_address(attrs[ATTR_XOR_PEER_ADDRESS], b"\x00" * 12)
+
+        # RFC 5766 §10.2: drop if peer IP has no installed permission
+        if peer_ip not in alloc.permissions:
+            logger.debug("Send indication dropped: no permission for %s", peer_ip)
+            return
+
         logger.info("Send indication: %s:%d → %s:%d (%d bytes)", addr[0], addr[1], peer_ip, peer_port, len(attrs[ATTR_DATA]))
         alloc.transport.sendto(attrs[ATTR_DATA], (peer_ip, peer_port))
 

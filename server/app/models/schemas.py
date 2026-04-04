@@ -6,10 +6,10 @@ from pydantic import BaseModel, Field
 
 
 class BootstrapRequest(BaseModel):
-    public_signing_key: str
-    public_identity_key: str
-    pqc_encapsulation_key: str = ""
-    fcm_token: Optional[str] = None
+    public_signing_key: str = Field(..., max_length=4096)
+    public_identity_key: str = Field(..., max_length=4096)
+    pqc_encapsulation_key: str = Field("", max_length=8192)
+    fcm_token: Optional[str] = Field(None, max_length=4096)
 
 
 class BootstrapResponse(BaseModel):
@@ -32,10 +32,10 @@ class ResolveShareCodeResponse(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
-    recipient_id: str
-    encrypted_body: str
-    nonce: str
-    ephemeral_public_key: str = ""
+    recipient_id: str = Field(..., max_length=64)
+    encrypted_body: str = Field(..., max_length=1_000_000)
+    nonce: str = Field(..., max_length=65536)
+    ephemeral_public_key: str = Field("", max_length=4096)
 
 
 class SendMessageResponse(BaseModel):
@@ -72,10 +72,10 @@ class HealthResponse(BaseModel):
 
 
 class CallSignalRequest(BaseModel):
-    recipient_id: str
-    signal_type: str
-    call_id: str
-    encrypted_payload: str
+    recipient_id: str = Field(..., max_length=64)
+    signal_type: str = Field(..., max_length=64)
+    call_id: str = Field(..., max_length=128)
+    encrypted_payload: str = Field(..., max_length=65536)
 
 
 class CallSignalResponse(BaseModel):
