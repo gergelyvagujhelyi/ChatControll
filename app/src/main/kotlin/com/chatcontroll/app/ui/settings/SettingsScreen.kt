@@ -4,15 +4,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -45,9 +49,49 @@ fun SettingsScreen(
     val shareCode by viewModel.shareCode.collectAsState()
     val showWipeConfirmation by viewModel.showWipeConfirmation.collectAsState()
     val wipeCompleted by viewModel.wipeCompleted.collectAsState()
+    val showRotateConfirmation by viewModel.showRotateConfirmation.collectAsState()
+    val isRotatingKeys by viewModel.isRotatingKeys.collectAsState()
+    val rotationError by viewModel.rotationError.collectAsState()
 
     LaunchedEffect(wipeCompleted) {
         if (wipeCompleted) onWiped()
+    }
+
+    if (showRotateConfirmation) {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelRotateKeys,
+            title = { Text("Rotate identity keys?") },
+            text = {
+                Text(
+                    "This generates new signing and encryption keys. " +
+                        "Your contacts will need to re-establish sessions. " +
+                        "Your share code will change."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmRotateKeys) {
+                    Text("Rotate")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelRotateKeys) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    rotationError?.let { error ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissRotationError,
+            title = { Text("Key rotation failed") },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissRotationError) {
+                    Text("OK")
+                }
+            },
+        )
     }
 
     if (showWipeConfirmation) {
@@ -106,6 +150,25 @@ fun SettingsScreen(
                 ) {
                     QrCodeImage(content = shareCode!!)
                 }
+            }
+
+            if (isRotatingKeys) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Text("Rotating keys...", style = MaterialTheme.typography.bodyLarge)
+                }
+            } else {
+                SettingsItem(
+                    title = "Rotate identity keys",
+                    subtitle = "Generate new signing and encryption keys",
+                    onClick = viewModel::requestRotateKeys,
+                )
             }
 
             HorizontalDivider()

@@ -12,7 +12,7 @@ interface IdentityRepository {
     suspend fun addContact(shareCode: String): Contact
     fun getContacts(): Flow<List<Contact>>
     suspend fun getContact(userId: String): Contact?
-    suspend fun publishKeyBundle()
+    suspend fun rotateIdentityKeys()
     suspend fun fetchKeyBundle(userId: String): Contact?
     fun isPqcSession(peerId: String): Boolean
 }

@@ -226,6 +226,14 @@ class RatchetSessionManager @Inject constructor(
         return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP)
     }
 
+    /** Clear all in-memory and persisted ratchet sessions (e.g. after key rotation). */
+    suspend fun clearAllSessions() {
+        sessionsMutex.withLock {
+            sessions.clear()
+            keyManager.removeAllRatchetStates()
+        }
+    }
+
     // ── Session persistence ──────────────────────────────────────────
 
     private fun persistSession(sessionId: String, state: RatchetState) {

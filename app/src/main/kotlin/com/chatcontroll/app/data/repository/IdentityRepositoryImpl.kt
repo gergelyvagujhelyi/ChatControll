@@ -33,6 +33,14 @@ class IdentityRepositoryImpl @Inject constructor(
     override suspend fun hasIdentity(): Boolean = keyManager.hasIdentity()
 
     override suspend fun getIdentity(): Identity? {
+        // Crash recovery: if staged keys exist, the server accepted the rotation
+        // but the app crashed before promotion. Promote them now.
+        if (keyManager.hasStagedKeys()) {
+            keyManager.promoteStagedKeys()
+            keyManager.clearSessionCache()
+            (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
+                ?.clearAllSessions()
+        }
         val keyPair = keyManager.loadIdentityKeyPair() ?: return null
         val userId = keyManager.getUserId() ?: return null
         val shareCode = keyManager.getShareCode()
@@ -165,7 +173,7 @@ class IdentityRepositoryImpl @Inject constructor(
         )
     }
 
-    override suspend fun publishKeyBundle() {
+    override suspend fun rotateIdentityKeys() {
         // Generate fresh identity keys
         val newKeyPair = cryptoEngine.generateIdentity()
 
@@ -199,25 +207,37 @@ class IdentityRepositoryImpl @Inject constructor(
         sig.update(proofData)
         val proofB64 = Base64.encodeToString(sig.sign(), Base64.NO_WRAP)
 
-        // Call server (authenticated with the CURRENT signing key via authToken)
-        val response = apiService.rotateKeys(
-            KeyRotationRequest(
-                publicSigningKey = newSignB64,
-                publicIdentityKey = newIdB64,
-                pqcEncapsulationKey = newPqcB64,
-                newKeyProof = proofB64,
-            )
-        )
-
-        // Server accepted — persist new keys locally
-        keyManager.storeIdentityKeyPair(newKeyPair)
+        // Stage new keys locally BEFORE the server call so that if the server
+        // accepts but the app crashes before local promotion, the next launch
+        // can recover by promoting the staged keys.
+        keyManager.stageIdentityKeyPair(newKeyPair)
         if (newPqcEk != null) {
-            keyManager.storePqcKeys(newPqcEk.encapsulationKey, newPqcEk.decapsulationKey)
+            keyManager.stagePqcKeys(newPqcEk.encapsulationKey, newPqcEk.decapsulationKey)
         }
+
+        // Call server (authenticated with the CURRENT signing key via authToken)
+        val response = try {
+            apiService.rotateKeys(
+                KeyRotationRequest(
+                    publicSigningKey = newSignB64,
+                    publicIdentityKey = newIdB64,
+                    pqcEncapsulationKey = newPqcB64,
+                    newKeyProof = proofB64,
+                )
+            )
+        } catch (e: Exception) {
+            keyManager.clearStagedKeys()
+            throw e
+        }
+
+        // Server accepted — promote staged keys to active
+        keyManager.promoteStagedKeys()
         keyManager.storeShareCode(response.shareCode)
 
         // Invalidate all session caches — peers will re-establish on next message
         keyManager.clearSessionCache()
+        (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
+            ?.clearAllSessions()
     }
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {

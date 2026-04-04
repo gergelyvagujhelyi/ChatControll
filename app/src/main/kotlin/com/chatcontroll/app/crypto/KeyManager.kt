@@ -151,6 +151,88 @@ class KeyManager @Inject constructor(
         encryptedPrefs.edit().remove(RATCHET_PREFIX + sessionId).apply()
     }
 
+    fun removeAllRatchetStates() {
+        val editor = encryptedPrefs.edit()
+        encryptedPrefs.all.keys
+            .filter { it.startsWith(RATCHET_PREFIX) }
+            .forEach { editor.remove(it) }
+        editor.apply()
+    }
+
+    // ── Staged key rotation (crash-safe) ──────────────────────────────
+
+    /**
+     * Stage new identity keys before the server call.
+     * If the server accepts, call [promoteStagedKeys] to make them active.
+     * If the server rejects or the call fails, call [clearStagedKeys].
+     */
+    fun stageIdentityKeyPair(keyPair: KeyPair) {
+        encryptedPrefs.edit()
+            .putString(PENDING_PUBLIC_SIGNING, keyPair.publicSigningKey.toHex())
+            .putString(PENDING_PRIVATE_SIGNING, keyPair.privateSigningKey.toHex())
+            .putString(PENDING_PUBLIC_IDENTITY, keyPair.publicIdentityKey.toHex())
+            .putString(PENDING_PRIVATE_IDENTITY, keyPair.privateIdentityKey.toHex())
+            .apply()
+    }
+
+    fun stagePqcKeys(encapsulationKey: ByteArray, decapsulationKey: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(PENDING_PQC_ENCAPSULATION, encapsulationKey.toHex())
+            .putString(PENDING_PQC_DECAPSULATION, decapsulationKey.toHex())
+            .apply()
+    }
+
+    /**
+     * Promote staged keys to active. Called after server confirms rotation,
+     * or on app startup if staged keys exist (server accepted but app crashed
+     * before promotion).
+     */
+    fun promoteStagedKeys() {
+        val pubSign = encryptedPrefs.getString(PENDING_PUBLIC_SIGNING, null) ?: return
+        val privSign = encryptedPrefs.getString(PENDING_PRIVATE_SIGNING, null) ?: return
+        val pubId = encryptedPrefs.getString(PENDING_PUBLIC_IDENTITY, null) ?: return
+        val privId = encryptedPrefs.getString(PENDING_PRIVATE_IDENTITY, null) ?: return
+
+        val editor = encryptedPrefs.edit()
+            .putString(KEY_PUBLIC_SIGNING, pubSign)
+            .putString(KEY_PRIVATE_SIGNING, privSign)
+            .putString(KEY_PUBLIC_IDENTITY, pubId)
+            .putString(KEY_PRIVATE_IDENTITY, privId)
+
+        // Promote PQC keys if staged
+        val pqcEk = encryptedPrefs.getString(PENDING_PQC_ENCAPSULATION, null)
+        val pqcDk = encryptedPrefs.getString(PENDING_PQC_DECAPSULATION, null)
+        if (pqcEk != null && pqcDk != null) {
+            editor.putString(KEY_PQC_ENCAPSULATION, pqcEk)
+            editor.putString(KEY_PQC_DECAPSULATION, pqcDk)
+        }
+
+        // Clear staged keys and apply atomically
+        editor
+            .remove(PENDING_PUBLIC_SIGNING)
+            .remove(PENDING_PRIVATE_SIGNING)
+            .remove(PENDING_PUBLIC_IDENTITY)
+            .remove(PENDING_PRIVATE_IDENTITY)
+            .remove(PENDING_PQC_ENCAPSULATION)
+            .remove(PENDING_PQC_DECAPSULATION)
+            .apply()
+    }
+
+    fun hasStagedKeys(): Boolean {
+        return encryptedPrefs.contains(PENDING_PUBLIC_SIGNING)
+    }
+
+    fun clearStagedKeys() {
+        encryptedPrefs.edit()
+            .remove(PENDING_PUBLIC_SIGNING)
+            .remove(PENDING_PRIVATE_SIGNING)
+            .remove(PENDING_PUBLIC_IDENTITY)
+            .remove(PENDING_PRIVATE_IDENTITY)
+            .remove(PENDING_PQC_ENCAPSULATION)
+            .remove(PENDING_PQC_DECAPSULATION)
+            .apply()
+    }
+
     fun wipeAll() {
         encryptedPrefs.edit().clear().apply()
         sessionCache.clear()
@@ -169,6 +251,12 @@ class KeyManager @Inject constructor(
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
         private const val PQC_PREFIX = "pqc_session_"
         private const val RATCHET_PREFIX = "ratchet_"
+        private const val PENDING_PUBLIC_SIGNING = "pending_pub_sign"
+        private const val PENDING_PRIVATE_SIGNING = "pending_priv_sign"
+        private const val PENDING_PUBLIC_IDENTITY = "pending_pub_id"
+        private const val PENDING_PRIVATE_IDENTITY = "pending_priv_id"
+        private const val PENDING_PQC_ENCAPSULATION = "pending_pqc_ek"
+        private const val PENDING_PQC_DECAPSULATION = "pending_pqc_dk"
     }
 }
 

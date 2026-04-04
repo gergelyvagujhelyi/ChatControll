@@ -39,6 +39,15 @@ class SettingsViewModel @Inject constructor(
     private val _wipeCompleted = MutableStateFlow(false)
     val wipeCompleted: StateFlow<Boolean> = _wipeCompleted.asStateFlow()
 
+    private val _showRotateConfirmation = MutableStateFlow(false)
+    val showRotateConfirmation: StateFlow<Boolean> = _showRotateConfirmation.asStateFlow()
+
+    private val _isRotatingKeys = MutableStateFlow(false)
+    val isRotatingKeys: StateFlow<Boolean> = _isRotatingKeys.asStateFlow()
+
+    private val _rotationError = MutableStateFlow<String?>(null)
+    val rotationError: StateFlow<String?> = _rotationError.asStateFlow()
+
     init {
         viewModelScope.launch {
             val identity = identityRepository.getIdentity()
@@ -100,5 +109,36 @@ class SettingsViewModel @Inject constructor(
             _showWipeConfirmation.value = false
             _wipeCompleted.value = true
         }
+    }
+
+    fun requestRotateKeys() {
+        _rotationError.value = null
+        _showRotateConfirmation.value = true
+    }
+
+    fun cancelRotateKeys() {
+        _showRotateConfirmation.value = false
+    }
+
+    fun confirmRotateKeys() {
+        _showRotateConfirmation.value = false
+        _isRotatingKeys.value = true
+        _rotationError.value = null
+        viewModelScope.launch {
+            try {
+                identityRepository.rotateIdentityKeys()
+                // Refresh the displayed share code
+                val identity = identityRepository.getIdentity()
+                _shareCode.value = identity?.shareCode
+            } catch (e: Exception) {
+                _rotationError.value = e.message ?: "Key rotation failed"
+            } finally {
+                _isRotatingKeys.value = false
+            }
+        }
+    }
+
+    fun dismissRotationError() {
+        _rotationError.value = null
     }
 }
