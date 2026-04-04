@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!-- Production: certificate pinning for the relay server.
-         Replace LEAF_SPKI_HASH and BACKUP_CA_SPKI_HASH with actual SHA-256
-         Subject Public Key Info hashes before production deployment.
+         Uncomment and replace pin hashes before production deployment.
          Generate with:
            openssl s_client -connect api.chatcontroll.vagujhelyigergely.com:443 \
              | openssl x509 -pubkey -noout \
@@ -12,10 +11,10 @@
     <domain-config>
         <domain includeSubdomains="true">api.chatcontroll.vagujhelyigergely.com</domain>
         <pin-set expiration="2027-10-01">
-            <!-- Leaf certificate pin (primary) -->
-            <pin digest="SHA-256">LEAF_SPKI_HASH=</pin>
-            <!-- Intermediate CA pin (backup — prevents lockout on cert rotation) -->
-            <pin digest="SHA-256">BACKUP_CA_SPKI_HASH=</pin>
+            <!-- Leaf certificate -->
+            <pin digest="SHA-256">IGKTWvLwJLnLEgt8NhoSwhbuCUZ5vqeWkRa9WfGfO6A=</pin>
+            <!-- Intermediate CA (backup) -->
+            <pin digest="SHA-256">iFvwVyJSxnQdyaUvUERIf+8qk7gRze3612JMwoO3zdU=</pin>
         </pin-set>
     </domain-config>
 
