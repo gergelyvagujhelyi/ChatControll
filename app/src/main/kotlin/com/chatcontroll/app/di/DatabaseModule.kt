@@ -1,6 +1,7 @@
 package com.chatcontroll.app.di
 
 import android.content.Context
+import android.util.Log
 import androidx.room.Room
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.local.AppDatabase
@@ -19,6 +20,8 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
 
+    private const val DB_NAME = "chatcontroll.db"
+
     @Provides
     @Singleton
     fun provideDatabase(
@@ -30,10 +33,29 @@ object DatabaseModule {
 
         val factory = SupportOpenHelperFactory(passphrase)
 
+        return try {
+            buildDatabase(context, factory).also {
+                // Force open to detect SQLCipher errors early
+                it.openHelper.writableDatabase
+            }
+        } catch (e: Exception) {
+            Log.w("DatabaseModule", "Database unreadable, deleting and recreating", e)
+            context.deleteDatabase(DB_NAME)
+            databaseWasReset = true
+            buildDatabase(context, factory)
+        }
+    }
+
+    /** Set to true when the DB had to be deleted due to encryption key mismatch. */
+    @Volatile
+    var databaseWasReset: Boolean = false
+        private set
+
+    private fun buildDatabase(context: Context, factory: SupportOpenHelperFactory): AppDatabase {
         return Room.databaseBuilder(
             context,
             AppDatabase::class.java,
-            "chatcontroll.db",
+            DB_NAME,
         )
             .openHelperFactory(factory)
             .fallbackToDestructiveMigration()
