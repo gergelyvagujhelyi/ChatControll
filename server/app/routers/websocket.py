@@ -136,17 +136,20 @@ async def websocket_endpoint(
                 recipient_id = msg.get("recipient_id", "")
                 call_id = msg.get("call_id", "")
                 encrypted_payload = msg.get("encrypted_payload", "")
+                signature = msg.get("signature", "")
 
                 # Validate types and lengths (match REST schema constraints)
                 if (
                     not isinstance(recipient_id, str)
                     or not isinstance(call_id, str)
                     or not isinstance(encrypted_payload, str)
+                    or not isinstance(signature, str)
                     or not recipient_id
                     or not call_id
                     or len(recipient_id) > 64
                     or len(call_id) > 128
                     or len(encrypted_payload) > 65536
+                    or len(signature) > 512
                 ):
                     await websocket.send_text(
                         json.dumps({"type": "error", "message": "Invalid call signal"})
@@ -177,6 +180,7 @@ async def websocket_endpoint(
                     signal_type=msg_type,
                     call_id=call_id,
                     encrypted_payload=encrypted_payload,
+                    signature=signature,
                 )
 
     except WebSocketDisconnect:

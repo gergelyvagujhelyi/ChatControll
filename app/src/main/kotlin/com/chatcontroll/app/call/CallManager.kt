@@ -48,6 +48,7 @@ class CallManager @Inject constructor(
     private val keyManager: KeyManager,
     private val cryptoEngine: CryptoEngine,
     private val webSocketClient: WebSocketClient,
+    private val contactDao: com.chatcontroll.app.data.local.dao.ContactDao,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -102,6 +103,24 @@ class CallManager @Inject constructor(
         logDebug("Incoming signal: ${signal.signalType}")
         scope.launch {
             try {
+                // Verify signature if present
+                if (signal.signature.isNotEmpty()) {
+                    val localUserId = keyManager.getUserId() ?: return@launch
+                    val contact = contactDao.getByUserId(signal.senderId)
+                    if (contact != null) {
+                        val sigPayload = signal.senderId.toByteArray(Charsets.UTF_8) +
+                            localUserId.toByteArray(Charsets.UTF_8) +
+                            signal.signalType.toByteArray(Charsets.UTF_8) +
+                            signal.callId.toByteArray(Charsets.UTF_8) +
+                            signal.encryptedPayload.toByteArray(Charsets.UTF_8)
+                        val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
+                        val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
+                        if (!valid) {
+                            Log.w(TAG, "Call signal signature verification failed")
+                            return@launch
+                        }
+                    }
+                }
                 when (signal.signalType) {
                     "call_offer" -> handleOffer(signal)
                     "call_answer" -> handleAnswer(signal)
@@ -228,7 +247,7 @@ class CallManager @Inject constructor(
 
         if (webRtcEngine != null && remoteDescriptionSet) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
-        } else {
+        } else if (pendingIceCandidates.size < MAX_PENDING_ICE_CANDIDATES) {
             pendingIceCandidates.add(candidate)
         }
     }
@@ -312,6 +331,13 @@ class CallManager @Inject constructor(
 
     private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String) {
         val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, payload) else ""
+        val senderId = keyManager.getUserId() ?: return
+        val sigPayload = senderId.toByteArray(Charsets.UTF_8) +
+            peerId.toByteArray(Charsets.UTF_8) +
+            signalType.toByteArray(Charsets.UTF_8) +
+            callId.toByteArray(Charsets.UTF_8) +
+            encrypted.toByteArray(Charsets.UTF_8)
+        val signature = Base64.encodeToString(keyManager.sign(sigPayload), Base64.NO_WRAP)
         try {
             apiService.sendCallSignal(
                 CallSignalRequest(
@@ -319,6 +345,7 @@ class CallManager @Inject constructor(
                     signalType = signalType,
                     callId = callId,
                     encryptedPayload = encrypted,
+                    signature = signature,
                 )
             )
         } catch (e: Exception) {
@@ -408,6 +435,7 @@ class CallManager @Inject constructor(
 
     companion object {
         private const val TAG = "CallManager"
+        private const val MAX_PENDING_ICE_CANDIDATES = 100
     }
 }
 

@@ -76,7 +76,7 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.3.0"
+    version: str = "0.3.1"
 
 
 class CallSignalRequest(BaseModel):
@@ -84,6 +84,7 @@ class CallSignalRequest(BaseModel):
     signal_type: str = Field(..., max_length=64)
     call_id: str = Field(..., max_length=128)
     encrypted_payload: str = Field(..., max_length=65536)
+    signature: str = Field("", max_length=512)
 
 
 class CallSignalResponse(BaseModel):

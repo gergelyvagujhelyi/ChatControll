@@ -40,6 +40,7 @@ async def relay_signal(
         signal_type=request.signal_type,
         call_id=request.call_id,
         encrypted_payload=request.encrypted_payload,
+        signature=request.signature,
     )
     return CallSignalResponse(delivered=delivered)
 
