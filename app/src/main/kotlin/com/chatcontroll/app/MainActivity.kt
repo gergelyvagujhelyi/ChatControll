@@ -6,6 +6,9 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -14,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
+import com.chatcontroll.app.di.DatabaseModule
 import com.chatcontroll.app.call.CallManager
 import com.chatcontroll.app.domain.model.CallDirection
 import com.chatcontroll.app.domain.model.CallStatus
@@ -57,6 +61,29 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ChatControllTheme {
+                var showDbResetDialog by remember {
+                    mutableStateOf(DatabaseModule.databaseWasReset)
+                }
+
+                if (showDbResetDialog) {
+                    AlertDialog(
+                        onDismissRequest = { /* must press OK */ },
+                        title = { Text("Local data was reset") },
+                        text = {
+                            Text(
+                                "The local database could not be opened and had to be recreated. " +
+                                "Your messages stored on this device have been lost. " +
+                                "Your identity and contacts are unaffected."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showDbResetDialog = false }) {
+                                Text("OK")
+                            }
+                        },
+                    )
+                }
+
                 var startDestination by remember { mutableStateOf<String?>(null) }
 
                 val navController = rememberNavController()
