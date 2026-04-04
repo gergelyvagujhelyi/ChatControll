@@ -40,7 +40,10 @@ class KeyManager @Inject constructor(
     private val sessionCache = ConcurrentHashMap<String, SessionKeys>()
 
     fun hasIdentity(): Boolean {
-        return encryptedPrefs.contains(KEY_PUBLIC_SIGNING)
+        return encryptedPrefs.contains(KEY_PUBLIC_SIGNING) &&
+            encryptedPrefs.contains(KEY_PRIVATE_SIGNING) &&
+            encryptedPrefs.contains(KEY_PUBLIC_IDENTITY) &&
+            encryptedPrefs.contains(KEY_PRIVATE_IDENTITY)
     }
 
     fun storeIdentityKeyPair(keyPair: KeyPair) {
@@ -89,6 +92,14 @@ class KeyManager @Inject constructor(
 
     fun getShareCode(): String? {
         return encryptedPrefs.getString(KEY_SHARE_CODE, null)
+    }
+
+    fun storeCreatedAt(epochMillis: Long) {
+        encryptedPrefs.edit().putLong(KEY_CREATED_AT, epochMillis).apply()
+    }
+
+    fun getCreatedAt(): Long {
+        return encryptedPrefs.getLong(KEY_CREATED_AT, 0L)
     }
 
     fun cacheSessionKeys(peerId: String, sessionKeys: SessionKeys) {
@@ -249,6 +260,7 @@ class KeyManager @Inject constructor(
         private const val KEY_SHARE_CODE = "share_code"
         private const val KEY_PQC_ENCAPSULATION = "pqc_ek"
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
+        private const val KEY_CREATED_AT = "created_at"
         private const val PQC_PREFIX = "pqc_session_"
         private const val RATCHET_PREFIX = "ratchet_"
         private const val PENDING_PUBLIC_SIGNING = "pending_pub_sign"

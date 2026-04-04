@@ -18,6 +18,7 @@ import com.chatcontroll.app.domain.repository.SessionKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,11 +46,20 @@ class IdentityRepositoryImpl @Inject constructor(
         val userId = keyManager.getUserId() ?: return null
         val shareCode = keyManager.getShareCode()
             ?: cryptoEngine.deriveShareCode(keyPair.publicIdentityKey)
+        val createdAtMs = keyManager.getCreatedAt()
+        val createdAt = if (createdAtMs > 0) {
+            Instant.fromEpochMilliseconds(createdAtMs)
+        } else {
+            // Legacy identity without stored timestamp — backfill with now
+            val now = Clock.System.now()
+            keyManager.storeCreatedAt(now.toEpochMilliseconds())
+            now
+        }
         return Identity(
             userId = userId,
             publicSigningKey = keyPair.publicSigningKey,
             publicIdentityKey = keyPair.publicIdentityKey,
-            createdAt = Clock.System.now(),
+            createdAt = createdAt,
             shareCode = shareCode,
         )
     }
@@ -89,14 +99,16 @@ class IdentityRepositoryImpl @Inject constructor(
             )
         )
 
+        val now = Clock.System.now()
         keyManager.storeUserId(response.userId)
         keyManager.storeShareCode(response.shareCode)
+        keyManager.storeCreatedAt(now.toEpochMilliseconds())
 
         return Identity(
             userId = response.userId,
             publicSigningKey = keyPair.publicSigningKey,
             publicIdentityKey = keyPair.publicIdentityKey,
-            createdAt = Clock.System.now(),
+            createdAt = now,
             shareCode = response.shareCode,
         )
     }
@@ -177,15 +189,13 @@ class IdentityRepositoryImpl @Inject constructor(
         // Generate fresh identity keys
         val newKeyPair = cryptoEngine.generateIdentity()
 
-        // Generate fresh PQC keys if current identity has them
+        // Generate fresh PQC keys if current identity has them.
+        // If the user has PQC keys, regeneration MUST succeed — partial rotation
+        // (new classical + stale PQC) would mix key epochs.
         val currentPqcEk = keyManager.getPqcEncapsulationKey()
-        val newPqcEk = if (currentPqcEk != null && currentPqcEk.isNotEmpty()) {
-            try {
-                val kemKeyPair = pqcProvider.generateKemKeyPair()
-                kemKeyPair
-            } catch (_: Exception) {
-                null
-            }
+        val hasPqc = currentPqcEk != null && currentPqcEk.isNotEmpty()
+        val newPqcEk = if (hasPqc) {
+            pqcProvider.generateKemKeyPair()
         } else null
 
         // Base64-encode the new public keys

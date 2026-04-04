@@ -184,7 +184,13 @@ async def rotate_keys(
 
 
 def _derive_share_code(public_identity_key_b64: str) -> str:
-    """Derive a short, URL-safe share code from the public identity key."""
+    """Derive a short, URL-safe share code from the public identity key.
+
+    Uses 12 bytes (96 bits) of SHA-256 — intentionally short for usability.
+    Share codes are public lookup handles (displayed in UI, shared via QR),
+    NOT secrets or authentication factors. 96 bits gives negligible collision
+    probability at realistic user populations (~2^48 for 50% birthday bound).
+    """
     try:
         key_bytes = base64.b64decode(public_identity_key_b64, validate=True)
     except Exception:
