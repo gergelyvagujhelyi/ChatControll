@@ -17,12 +17,13 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import verify_token
 from app.config import WS_IDLE_TIMEOUT_SECONDS
-from app.database import async_session
+from app.database import get_db
 from app.models.db import Identity
 from app.services.websocket_manager import ws_manager
 
@@ -31,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 
 @router.websocket("/v1/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
+async def websocket_endpoint(
+    websocket: WebSocket,
+    db: AsyncSession = Depends(get_db),
+) -> None:
     """Handle a WebSocket connection for real-time delivery signals."""
     user_id: Optional[str] = None
 
@@ -67,19 +71,18 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             return
 
         claimed_user_id = parts[0]
-        async with async_session() as db:
-            result = await db.execute(
-                select(Identity.public_signing_key).where(
-                    Identity.user_id == claimed_user_id
-                )
+        result = await db.execute(
+            select(Identity.public_signing_key).where(
+                Identity.user_id == claimed_user_id
             )
-            pub_key_b64 = result.scalar_one_or_none()
-            if pub_key_b64 is None:
-                await websocket.send_text(
-                    json.dumps({"type": "error", "message": "Unknown identity"})
-                )
-                await websocket.close(code=4003)
-                return
+        )
+        pub_key_b64 = result.scalar_one_or_none()
+        if pub_key_b64 is None:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": "Unknown identity"})
+            )
+            await websocket.close(code=4003)
+            return
 
         try:
             user_id = verify_token(token, pub_key_b64)

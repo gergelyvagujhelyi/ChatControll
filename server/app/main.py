@@ -24,13 +24,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import DEBUG, MAX_REQUEST_BODY_BYTES, TURN_ENABLED, TURN_RELAY_IP
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, TURN_ENABLED, TURN_RELAY_IP
 from sqlalchemy import text
 
 from app.database import async_session, engine
 from app.models.db import Base
 from app.models.schemas import HealthResponse
 from app.routers import calling, identity, messages, push, websocket
+from app.services.metrics import MetricsMiddleware, metrics_endpoint
 from app.services.websocket_manager import ws_manager
 
 if DEBUG:
@@ -112,11 +113,12 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(MetricsMiddleware)
 
 # CORS — restrict in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if DEBUG else [],
+    allow_origins=["*"] if DEBUG else CORS_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
@@ -127,6 +129,9 @@ app.include_router(messages.router)
 app.include_router(push.router)
 app.include_router(websocket.router)
 app.include_router(calling.router)
+
+
+app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], tags=["ops"], include_in_schema=False)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["health"])

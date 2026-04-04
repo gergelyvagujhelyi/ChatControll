@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import verify_auth_token
 from app.database import get_db
 from app.models.db import Identity, PendingMessage, RateLimit
+from app.services.ip_rate_limiter import check_ip_rate_limit
 from app.models.schemas import (
     BootstrapRequest,
     BootstrapResponse,
@@ -27,7 +28,7 @@ from app.models.schemas import (
 router = APIRouter(prefix="/v1/identity", tags=["identity"])
 
 
-@router.post("/bootstrap", response_model=BootstrapResponse)
+@router.post("/bootstrap", response_model=BootstrapResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def bootstrap_identity(
     request: BootstrapRequest,
     db: AsyncSession = Depends(get_db),
@@ -65,7 +66,7 @@ async def bootstrap_identity(
     return BootstrapResponse(user_id=user_id, share_code=share_code)
 
 
-@router.get("/{user_id}/keys", response_model=KeyBundleResponse)
+@router.get("/{user_id}/keys", response_model=KeyBundleResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def fetch_key_bundle(
     user_id: str,
     db: AsyncSession = Depends(get_db),
@@ -86,7 +87,7 @@ async def fetch_key_bundle(
     )
 
 
-@router.get("/resolve/{share_code}", response_model=ResolveShareCodeResponse)
+@router.get("/resolve/{share_code}", response_model=ResolveShareCodeResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def resolve_share_code(
     share_code: str,
     db: AsyncSession = Depends(get_db),
