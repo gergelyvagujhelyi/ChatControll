@@ -252,16 +252,33 @@ class MessageRepositoryImpl @Inject constructor(
                 decryptFailCounts.remove(dto.messageId)
                 result
             } catch (e: Exception) {
-                android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
-                val failures = (decryptFailCounts[dto.messageId] ?: 0) + 1
-                decryptFailCounts[dto.messageId] = failures
-                if (failures >= MAX_DECRYPT_RETRIES) {
-                    // Permanently failed — acknowledge to unblock the queue
-                    android.util.Log.w("MessageRepo", "Giving up on message ${dto.messageId} after $failures attempts")
-                    receivedIds.add(dto.messageId)
-                    decryptFailCounts.remove(dto.messageId)
+                // If both sides encapsulated independently (different PQC secrets),
+                // re-establish the session using the inbound KEM ciphertext.
+                if (kemCiphertext != null && sessionKeys.pqcEstablished) {
+                    val reEstablished = tryEstablishSession(dto.senderId, kemCiphertext)
+                    if (reEstablished != null) {
+                        try {
+                            val result = peerMutex.withLock {
+                                cryptoEngine.decrypt(reEstablished, envelope)
+                            }
+                            decryptFailCounts.remove(dto.messageId)
+                            result
+                        } catch (retryEx: Exception) {
+                            android.util.Log.e("MessageRepo",
+                                "Decrypt failed after PQC re-establish from ${dto.senderId}: ${retryEx.message}", retryEx)
+                            countDecryptFailure(dto.messageId, receivedIds)
+                            continue
+                        }
+                    } else {
+                        android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
+                        countDecryptFailure(dto.messageId, receivedIds)
+                        continue
+                    }
+                } else {
+                    android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
+                    countDecryptFailure(dto.messageId, receivedIds)
+                    continue
                 }
-                continue
             }
 
             val conversationId = getOrCreateConversationId(dto.senderId)
@@ -317,8 +334,8 @@ class MessageRepositoryImpl @Inject constructor(
             } else ByteArray(0)
 
             // Only pass PQC key when we have inbound KEM ciphertext to decapsulate.
-            // Without it, the initiator would encapsulate and derive a hybrid root
-            // key that doesn't match the sender's classical-only session.
+            // Without it, we would encapsulate and derive a hybrid root key that
+            // doesn't match the sender's existing session.
             val sessionKeys = cryptoEngine.establishSession(
                 localIdentity = localKeyPair,
                 remotePublicBundle = PublicKeyBundle(
@@ -386,6 +403,16 @@ class MessageRepositoryImpl @Inject constructor(
             )
         )
         return id
+    }
+
+    private fun countDecryptFailure(messageId: String, receivedIds: MutableList<String>) {
+        val failures = (decryptFailCounts[messageId] ?: 0) + 1
+        decryptFailCounts[messageId] = failures
+        if (failures >= MAX_DECRYPT_RETRIES) {
+            android.util.Log.w("MessageRepo", "Giving up on message $messageId after $failures attempts")
+            receivedIds.add(messageId)
+            decryptFailCounts.remove(messageId)
+        }
     }
 
     companion object {

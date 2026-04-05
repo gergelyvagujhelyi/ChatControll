@@ -61,15 +61,16 @@ class HybridCryptoEngine @Inject constructor(
         val isInitiator = localIdentity.publicIdentityKey.joinToString("") { "%02x".format(it) } <
             remotePublicBundle.publicIdentityKey.joinToString("") { "%02x".format(it) }
 
-        // Post-quantum KEM shared secret: initiator encapsulates, responder decapsulates
+        // Post-quantum KEM shared secret: either side can encapsulate or decapsulate.
+        // Priority: inbound KEM ciphertext → decapsulate; otherwise encapsulate.
         var pqSecret = ByteArray(0)
-        if (isInitiator && remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
-            val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
-            pqSecret = encapsulation.sharedSecret
-        } else if (!isInitiator && inboundKemCiphertext != null) {
+        if (inboundKemCiphertext != null) {
             val dk = keyManager.getPqcDecapsulationKey()
                 ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
             pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
+        } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
+            val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
+            pqSecret = encapsulation.sharedSecret
         }
 
         // Combine via HKDF
