@@ -25,6 +25,9 @@ interface MessageDao {
     @Query("UPDATE messages SET state = :state, timestamp = :timestamp WHERE id = :messageId")
     suspend fun updateStateAndTimestamp(messageId: String, state: String, timestamp: Long)
 
+    @Query("UPDATE messages SET encryptedBody = :encryptedBody, nonce = :nonce WHERE id = :messageId")
+    suspend fun updateEncryptedBody(messageId: String, encryptedBody: ByteArray, nonce: ByteArray)
+
     @Query("SELECT * FROM messages WHERE id = :messageId")
     suspend fun getById(messageId: String): MessageEntity?
 

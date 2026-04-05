@@ -43,14 +43,17 @@ class FcmService : FirebaseMessagingService() {
         // The push notification is a "wake-up" signal only.
         // We never send message content through FCM — the encrypted envelope
         // is fetched directly from the relay server.
+        val senderId = message.data["senderId"] ?: "Unknown"
+        val conversationId = message.data["conversationId"]
+
         scope.launch {
             try {
                 messageRepository.fetchPendingFromServer()
+            } catch (_: Exception) {
+                // Best-effort sync — notification still shown below
+            }
 
-                // Show a generic notification — content comes from local decryption
-                val senderId = message.data["senderId"] ?: "Unknown"
-                val conversationId = message.data["conversationId"]
-
+            try {
                 notificationManager.showMessageNotification(
                     senderId = senderId,
                     senderName = senderId.take(8),
