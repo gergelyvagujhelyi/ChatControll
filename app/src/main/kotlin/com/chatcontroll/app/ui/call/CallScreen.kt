@@ -90,7 +90,7 @@ fun CallScreen(
             }
         } else when (state.status) {
             CallStatus.ENDED, CallStatus.FAILED, CallStatus.NO_RELAY,
-            CallStatus.REJECTED, CallStatus.BUSY -> {
+            CallStatus.REJECTED, CallStatus.BUSY, CallStatus.UNAVAILABLE -> {
                 delay(1500)
                 onCallEnded()
             }
@@ -274,5 +274,6 @@ private fun statusText(status: CallStatus?, direction: CallDirection?): String =
     CallStatus.NO_RELAY -> "Call failed \u2014 relay unavailable"
     CallStatus.REJECTED -> "Call declined"
     CallStatus.BUSY -> "Busy"
+    CallStatus.UNAVAILABLE -> "Contact unavailable"
     else -> ""
 }

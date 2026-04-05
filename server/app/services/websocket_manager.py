@@ -11,6 +11,7 @@ decrypts the envelope via the REST API.
 import asyncio
 import json
 import logging
+import time
 from collections import defaultdict, OrderedDict
 from typing import Dict
 
@@ -22,6 +23,9 @@ logger = logging.getLogger(__name__)
 MAX_WS_CONNECTIONS_PER_USER = 5
 
 
+_PENDING_SIGNAL_TTL = 30  # seconds — signals older than this are discarded
+
+
 class WebSocketManager:
     """Manages active WebSocket connections per user."""
 
@@ -30,6 +34,9 @@ class WebSocketManager:
         # Using OrderedDict (instead of set) so eviction removes the oldest.
         self._connections: Dict[str, OrderedDict[WebSocket, None]] = defaultdict(OrderedDict)
         self._lock = asyncio.Lock()
+        # Pending call signals for users who are not currently connected.
+        # user_id → list of (timestamp, payload_json) tuples.
+        self._pending_call_signals: Dict[str, list[tuple[float, str]]] = {}
 
     async def connect(self, user_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -47,6 +54,9 @@ class WebSocketManager:
                     pass
             self._connections[user_id][websocket] = None
         logger.info("WebSocket connected: %s", user_id[:8])
+
+        # Deliver any pending call signals that were queued while offline
+        await self._flush_pending_signals(user_id, websocket)
 
     async def disconnect(self, user_id: str, websocket: WebSocket) -> None:
         async with self._lock:
@@ -106,6 +116,29 @@ class WebSocketManager:
                 pass
         logger.info("All WebSocket connections closed for shutdown")
 
+    async def _flush_pending_signals(self, user_id: str, websocket: WebSocket) -> None:
+        """Deliver pending call signals to a newly connected user."""
+        now = time.monotonic()
+        signals = self._pending_call_signals.pop(user_id, [])
+        for ts, payload in signals:
+            if now - ts > _PENDING_SIGNAL_TTL:
+                continue  # expired
+            try:
+                await websocket.send_text(payload)
+                logger.info("Delivered pending call signal to %s", user_id[:8])
+            except Exception:
+                pass
+
+    def _store_pending_signal(self, recipient_id: str, payload: str) -> None:
+        """Buffer a call signal for a user who is currently offline."""
+        now = time.monotonic()
+        pending = self._pending_call_signals.setdefault(recipient_id, [])
+        # Evict expired entries
+        pending[:] = [(ts, p) for ts, p in pending if now - ts <= _PENDING_SIGNAL_TTL]
+        # Cap at a reasonable number to prevent abuse
+        if len(pending) < 20:
+            pending.append((now, payload))
+
     async def relay_call_signal(
         self,
         sender_id: str,
@@ -122,9 +155,6 @@ class WebSocketManager:
         async with self._lock:
             sockets = list(self._connections.get(recipient_id, {}))
 
-        if not sockets:
-            return False
-
         payload = json.dumps({
             "type": signal_type,
             "sender_id": sender_id,
@@ -132,6 +162,11 @@ class WebSocketManager:
             "encrypted_payload": encrypted_payload,
             "signature": signature,
         })
+
+        if not sockets:
+            # Recipient offline — buffer the signal for delivery when they connect
+            self._store_pending_signal(recipient_id, payload)
+            return False
 
         delivered = False
         for ws in sockets:

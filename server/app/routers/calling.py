@@ -7,8 +7,12 @@ import time
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import verify_auth_token
+from app.database import get_db
+from app.models.db import Identity
 from app.models.schemas import (
     CallSignalRequest,
     CallSignalResponse,
@@ -16,6 +20,7 @@ from app.models.schemas import (
     IceServersResponse,
 )
 from app.config import TURN_CREDENTIAL_TTL, TURN_SECRET
+from app.services.push import send_push_notification
 from app.services.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/v1/calls", tags=["calling"])
@@ -33,6 +38,7 @@ _signal_times: dict[str, list[float]] = defaultdict(list)
 async def relay_signal(
     request: CallSignalRequest,
     x_user_id: str = Depends(verify_auth_token),
+    db: AsyncSession = Depends(get_db),
 ) -> CallSignalResponse:
     if request.signal_type not in _ALLOWED_SIGNAL_TYPES:
         raise HTTPException(status_code=400, detail="Invalid signal type")
@@ -61,6 +67,23 @@ async def relay_signal(
         encrypted_payload=request.encrypted_payload,
         signature=request.signature,
     )
+
+    # FCM push fallback for call_offer — wake the recipient's app so it
+    # connects WebSocket and picks up the buffered signal.
+    if not delivered and request.signal_type == "call_offer":
+        result = await db.execute(
+            select(Identity.fcm_token).where(
+                Identity.user_id == request.recipient_id
+            )
+        )
+        fcm_token = result.scalar_one_or_none()
+        if fcm_token:
+            await send_push_notification(
+                fcm_token=fcm_token,
+                recipient_id=request.recipient_id,
+                sender_id=x_user_id,
+            )
+
     return CallSignalResponse(delivered=delivered)
 
 
