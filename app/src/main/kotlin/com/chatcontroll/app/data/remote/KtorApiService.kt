@@ -72,7 +72,9 @@ class KtorApiService @Inject constructor(
             })
         }
         install(Logging) {
-            level = if (BuildConfig.DEBUG) LogLevel.HEADERS else LogLevel.NONE
+            // Use INFO (method + URL only) instead of HEADERS to avoid
+            // leaking Authorization tokens to logcat in debug builds.
+            level = if (BuildConfig.DEBUG) LogLevel.INFO else LogLevel.NONE
         }
         defaultRequest {
             url(BuildConfig.API_BASE_URL)
