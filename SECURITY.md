@@ -15,7 +15,7 @@ recv_key = shared_secret[32:64]
 ```
 
 - **Classical component**: X25519 (Curve25519 ECDH). Well-vetted, widely deployed.
-- **Post-quantum component**: ML-KEM-768 (NIST FIPS 203). Currently mocked — the `MockPqcProvider` provides **no quantum resistance**. It validates the hybrid flow only.
+- **Post-quantum component**: ML-KEM-768 (NIST FIPS 203) via Bouncy Castle 1.79+. Production post-quantum key encapsulation is active for all hybrid sessions.
 - **Key derivation**: HKDF-SHA256 (RFC 5869) combines both shared secrets.
 - **Payload encryption**: AES-256-GCM with random 12-byte nonces.
 
@@ -70,13 +70,17 @@ The `RatchetSessionManager` implements a Signal-style Double Ratchet:
 - **Per-message forward secrecy**: Each message uses a unique key derived from a symmetric chain ratchet. Used keys are deleted.
 - **Break-in recovery**: DH ratchet steps generate new ephemeral X25519 keypairs, so even if session state is compromised, future messages become secure after the next ratchet step.
 - **Out-of-order tolerance**: Up to 256 skipped message keys are cached for messages that arrive out of order.
-- **Limitation**: Ratchet state is currently held in memory. App restart requires re-keying. Persisting encrypted ratchet state to the database is a priority improvement.
+- **Persistence**: Ratchet session state (root key, chain keys, message counters, skipped keys) is persisted to EncryptedSharedPreferences and survives app restarts. Session-to-contact mapping is also persisted, so ongoing conversations resume without re-keying. Full DB-backed persistence for ratchet chains is a future improvement for multi-device support.
 
-### No Key Rotation
-Identity keys are generated once and used indefinitely. A key rotation mechanism should be added for:
-- Periodic re-keying
-- Compromise recovery
-- Device migration
+### Key Rotation (v0.3.3+)
+`rotateIdentityKeys()` generates new Ed25519 + X25519 + ML-KEM-768 keys and registers them with the relay server. The protocol uses crash-safe staged promotion:
+1. New keys are staged locally before the server call.
+2. Server validates a proof-of-possession signature (new key signs itself).
+3. On server acceptance, staged keys are promoted to active.
+4. On app crash between server acceptance and local promotion, the next launch detects staged keys and auto-promotes them.
+5. All session caches are invalidated — peers re-establish on next message.
+
+**Remaining work**: No automated rotation schedule, no contact notification of rotated keys, and no old-key grace period for in-flight messages.
 
 ### Device Loss = Identity Loss
 Since identity lives only on the device, losing the device means losing:
@@ -98,6 +102,17 @@ Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519.
 
 ### Signature Verification Robustness (v0.3.1+)
 When a signed message arrives from an unknown sender, the client attempts to establish a session (fetching the sender's key bundle) before verification. If the sender cannot be resolved, the message is silently dropped. This closes a bypass where signed messages from unknown contacts could skip verification.
+
+### PQC Negotiation & Downgrade Protection (v0.3.4+)
+- **Symmetric encapsulation**: Either party can initiate ML-KEM-768 encapsulation. If a message carries KEM ciphertext, the recipient decapsulates; otherwise, the recipient encapsulates toward the sender's public encapsulation key. This eliminates the prior bug where only the lexicographic initiator could start a hybrid session.
+- **Re-establishment on failure**: If decryption fails on a message with KEM ciphertext and an existing PQC session, the client re-establishes the session using the inbound KEM ciphertext before retrying.
+- **PQC downgrade rejection**: If a contact was previously established as a hybrid PQ session, any subsequent classical-only session establishment is rejected. This prevents a MITM from silently stripping PQC protection.
+
+### Base64 Input Validation (v0.3.4+)
+All `Base64.decode` calls on externally-received data (key bundles, KEM ciphertext, message envelopes) are wrapped in try/catch. Malformed Base64 from the server or a peer is logged and rejected rather than crashing the app.
+
+### Call Signal Reliability (v0.3.4+)
+`rejectCall()` and `hangup()` now send the signaling message (reject/hangup) and wait for it to complete before tearing down local call state. Previously, `endCall()` ran synchronously and could destroy the call context before the signal was sent, causing the peer to never receive the reject/hangup.
 
 ### Certificate Pinning
 Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2027-10-01 and must be rotated before expiry.
@@ -130,9 +145,13 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] Per-challenge TURN nonce rotation (RFC 5389 compliant)
 - [x] ICE candidate bounds (max 100 pending per call)
 - [x] Certificate pinning with real SPKI hashes
-- [ ] Ratchet state persistence (survive app restart) — `RatchetSessionManager` persists state to EncryptedSharedPreferences; session mapping survives restart but in-memory ratchet chain is re-keyed. Full DB-backed persistence is still needed.
+- [x] Ratchet state persistence (survive app restart) — sessions persisted to EncryptedSharedPreferences
+- [x] PQC downgrade rejection — classical-only re-establishment blocked for hybrid contacts
+- [x] Base64 input validation on all externally-received key material
+- [x] Call signal reliability — reject/hangup signals sent before local teardown
 - [ ] Push proxy to break FCM linkability
-- [ ] Key rotation protocol — `rotateIdentityKeys()` exists with crash-safe staged promotion, but no automated schedule, contact notification, or old-key grace period.
+- [x] Key rotation protocol — `rotateIdentityKeys()` with crash-safe staged promotion
+- [ ] Automated key rotation schedule + contact notification + old-key grace period
 - [ ] Reproducible builds
 
 ## Abuse Controls
