@@ -68,11 +68,34 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
+async def _migrate_pending_messages(conn) -> None:
+    """Add columns that may be missing from an older pending_messages table.
+
+    SQLAlchemy's create_all only creates new tables — it never ALTERs
+    existing ones. This lightweight migration adds columns introduced
+    after the initial schema so that existing deployments keep working.
+    """
+    log = logging.getLogger(__name__)
+    migrations = [
+        ("ephemeral_public_key", "ALTER TABLE pending_messages ADD COLUMN ephemeral_public_key TEXT NOT NULL DEFAULT ''"),
+        ("signature", "ALTER TABLE pending_messages ADD COLUMN signature TEXT NOT NULL DEFAULT ''"),
+        ("timestamp_ms", "ALTER TABLE pending_messages ADD COLUMN timestamp_ms BIGINT"),
+    ]
+    for col_name, ddl in migrations:
+        try:
+            await conn.execute(text(ddl))
+            log.info("Migrated pending_messages: added column %s", col_name)
+        except Exception:
+            # Column already exists — expected on fresh or already-migrated DBs
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start services and ensure database tables exist."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _migrate_pending_messages(conn)
 
     turn_transport = None
     if TURN_ENABLED:
