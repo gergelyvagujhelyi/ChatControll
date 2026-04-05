@@ -46,6 +46,9 @@ class MessageRepositoryImpl @Inject constructor(
     /** Track consecutive decrypt failures per message to avoid infinite retry. */
     private val decryptFailCounts = mutableMapOf<String, Int>()
 
+    /** Track peers already notified with session_reset to avoid duplicate signals. */
+    private val sessionResetSentTo = mutableSetOf<String>()
+
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
             entities.map { it.toDomain(keyManager.getUserId() ?: "") }
@@ -189,6 +192,9 @@ class MessageRepositoryImpl @Inject constructor(
         val receivedIds = mutableListOf<String>()
 
         for (dto in pending) {
+            // Check for control messages (session_reset signals)
+            if (handleControlMessage(dto, receivedIds)) continue
+
             // Extract KEM ciphertext from message header for PQC handshake
             val kemCiphertext = try {
                 val nonce = Base64.decode(dto.nonce, Base64.NO_WRAP)
@@ -458,6 +464,17 @@ class MessageRepositoryImpl @Inject constructor(
             ))
             receivedIds.add(messageId)
             decryptFailCounts.remove(messageId)
+
+            // Notify the sender that they need to re-establish their session
+            if (senderId !in sessionResetSentTo) {
+                try {
+                    sendSessionResetSignal(senderId)
+                    sessionResetSentTo.add(senderId)
+                } catch (e: Exception) {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "Failed to send session_reset to ${senderId.take(8)}: ${e.message}")
+                }
+            }
         }
     }
 
@@ -485,6 +502,126 @@ class MessageRepositoryImpl @Inject constructor(
         ))
     }
 
+    /**
+     * Send a session_reset control message to a peer whose messages we can't decrypt.
+     * Uses the existing message pipeline for guaranteed delivery (store-and-forward).
+     */
+    private suspend fun sendSessionResetSignal(recipientId: String) {
+        val senderId = keyManager.getUserId() ?: return
+        val controlPayload = """{"ctrl":"session_reset"}"""
+        val nonceBytes = controlPayload.toByteArray(Charsets.UTF_8)
+        val bodyBytes = ByteArray(0)
+
+        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(recipientId.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(nonceBytes) + bodyBytes
+        val signature = keyManager.sign(sigPayload)
+
+        apiService.sendMessage(
+            SendMessageRequest(
+                recipientId = recipientId,
+                encryptedBody = Base64.encodeToString(bodyBytes, Base64.NO_WRAP),
+                nonce = Base64.encodeToString(nonceBytes, Base64.NO_WRAP),
+                signature = Base64.encodeToString(signature, Base64.NO_WRAP),
+            )
+        )
+    }
+
+    /**
+     * Check if a pending message is a control message (e.g. session_reset).
+     * Returns true if the message was handled and should be skipped.
+     */
+    private suspend fun handleControlMessage(
+        dto: com.chatcontroll.app.data.remote.dto.PendingMessageDto,
+        receivedIds: MutableList<String>,
+    ): Boolean {
+        val nonceBytes = try {
+            Base64.decode(dto.nonce, Base64.NO_WRAP)
+        } catch (_: Exception) { return false }
+
+        val nonceStr = try {
+            String(nonceBytes, Charsets.UTF_8)
+        } catch (_: Exception) { return false }
+
+        if (!nonceStr.startsWith("{\"ctrl\":")) return false
+
+        val ctrl = try {
+            headerJson.parseToJsonElement(nonceStr)
+                .let { it as? kotlinx.serialization.json.JsonObject }
+                ?.get("ctrl")
+                ?.let { it as? kotlinx.serialization.json.JsonPrimitive }
+                ?.content
+        } catch (_: Exception) { return false }
+
+        if (ctrl != "session_reset") return false
+
+        // Verify signature using the sender's CURRENT key from the server
+        // (their locally stored key may be outdated after rotation)
+        val bundle = try {
+            apiService.fetchKeyBundle(dto.senderId)
+        } catch (_: Exception) { null }
+
+        if (bundle != null && dto.signature.isNotEmpty()) {
+            val localUserId = keyManager.getUserId() ?: ""
+            val pubSignKey = try {
+                Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+            } catch (_: Exception) { null }
+            val pubIdKey = try {
+                Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+            } catch (_: Exception) { null }
+
+            if (pubSignKey != null) {
+                val sigPayload = lengthPrefixed(dto.senderId.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(nonceBytes) + ByteArray(0)
+                val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+                val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
+                if (!valid) {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "session_reset signature invalid from ${dto.senderId.take(8)}")
+                    receivedIds.add(dto.messageId)
+                    return true
+                }
+
+                // Update the contact's stored keys to the new ones
+                val existingContact = contactDao.getByUserId(dto.senderId)
+                if (existingContact != null && pubIdKey != null) {
+                    contactDao.upsert(existingContact.copy(
+                        publicSigningKey = pubSignKey,
+                        publicIdentityKey = pubIdKey,
+                    ))
+                }
+            }
+        }
+
+        // Clear stale session for this peer
+        keyManager.clearSessionForPeer(dto.senderId)
+
+        // Mark conversation as needing session re-establishment
+        conversationDao.setNeedsSessionReset(dto.senderId, true)
+
+        if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.i("MessageRepo",
+            "Session reset received from ${dto.senderId.take(8)}, session cleared")
+
+        receivedIds.add(dto.messageId)
+        return true
+    }
+
+    override suspend fun reEstablishSession(contactId: String) {
+        // Clear old session state
+        keyManager.clearSessionForPeer(contactId)
+
+        // Fetch fresh key bundle and establish new session
+        val sessionKeys = tryEstablishSession(contactId)
+            ?: throw IllegalStateException("Could not re-establish session with $contactId")
+
+        // Clear the flag — sending is now allowed again
+        conversationDao.setNeedsSessionReset(contactId, false)
+
+        // Clear dedup tracking so future decrypt failures from this peer are handled
+        sessionResetSentTo.remove(contactId)
+    }
+
     companion object {
         /** After this many failed decrypt attempts, acknowledge the message to
          *  prevent it from poisoning the pending queue forever. */
@@ -510,6 +647,7 @@ class MessageRepositoryImpl @Inject constructor(
                 unreadCount = if (incrementUnread) currentUnread + 1 else currentUnread,
                 isEncrypted = true,
                 isApproved = existing?.isApproved ?: true,
+                needsSessionReset = existing?.needsSessionReset ?: false,
             )
         )
     }

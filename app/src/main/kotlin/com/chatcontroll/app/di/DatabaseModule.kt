@@ -69,6 +69,13 @@ object DatabaseModule {
         }
     }
 
+    /** v3→v4: add needsSessionReset column to conversations for key rotation flow. */
+    private val MIGRATION_3_4 = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE conversations ADD COLUMN needsSessionReset INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
     private fun buildDatabase(context: Context, factory: SupportOpenHelperFactory): AppDatabase {
         return Room.databaseBuilder(
             context,
@@ -76,7 +83,7 @@ object DatabaseModule {
             DB_NAME,
         )
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .fallbackToDestructiveMigration()
             .build()
     }

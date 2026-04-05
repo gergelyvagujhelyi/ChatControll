@@ -84,5 +84,6 @@ private fun ConversationEntity.toDomain(): Conversation {
         unreadCount = unreadCount,
         isEncrypted = isEncrypted,
         isApproved = isApproved,
+        needsSessionReset = needsSessionReset,
     )
 }

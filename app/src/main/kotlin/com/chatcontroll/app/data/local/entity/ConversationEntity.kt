@@ -13,4 +13,5 @@ data class ConversationEntity(
     val unreadCount: Int,
     val isEncrypted: Boolean,
     val isApproved: Boolean = true,
+    val needsSessionReset: Boolean = false,
 )

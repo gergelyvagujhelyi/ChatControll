@@ -80,7 +80,15 @@ The `RatchetSessionManager` implements a Signal-style Double Ratchet:
 4. On app crash between server acceptance and local promotion, the next launch detects staged keys and auto-promotes them.
 5. All session caches are invalidated — peers re-establish on next message.
 
-**Remaining work**: No automated rotation schedule, no contact notification of rotated keys, and no old-key grace period for in-flight messages.
+**Remaining work**: No automated rotation schedule and no old-key grace period for in-flight messages.
+
+### Session Reset Protocol (v0.3.5+)
+When a peer rotates their identity keys, the recipient's ratchet state becomes stale and messages cannot be decrypted. The session reset protocol handles this:
+1. After `MAX_DECRYPT_RETRIES` (3) failed decrypt attempts, a `session_reset` control message is sent to the sender via the existing message pipeline (store-and-forward, guaranteed delivery even if the sender is offline).
+2. The control message is signed with the recipient's current key and verified by the sender against the server's latest key bundle (handles the case where the verifier's locally stored key is outdated).
+3. On receiving the signal, the sender's contact record is updated with the peer's new keys, the stale session is cleared, and the conversation is blocked (`needsSessionReset` flag).
+4. The sender must manually tap "Re-establish session" in the chat UI, which fetches the peer's new key bundle, creates a fresh ratchet session, and unlocks sending.
+5. Deduplication prevents multiple `session_reset` signals to the same peer; the tracking is cleared when a successful decrypt from that peer occurs.
 
 ### Device Loss = Identity Loss
 Since identity lives only on the device, losing the device means losing:
@@ -115,7 +123,7 @@ All `Base64.decode` calls on externally-received data (key bundles, KEM cipherte
 `rejectCall()` and `hangup()` now send the signaling message (reject/hangup) and wait for it to complete before tearing down local call state. Previously, `endCall()` ran synchronously and could destroy the call context before the signal was sent, causing the peer to never receive the reject/hangup.
 
 ### Certificate Pinning
-Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2027-10-01 and must be rotated before expiry.
+Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry.
 
 ## Security Checklist
 
@@ -149,9 +157,10 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] PQC downgrade rejection — classical-only re-establishment blocked for hybrid contacts
 - [x] Base64 input validation on all externally-received key material
 - [x] Call signal reliability — reject/hangup signals sent before local teardown
+- [x] Session reset on key rotation — peers notified and blocked until re-keyed
 - [ ] Push proxy to break FCM linkability
 - [x] Key rotation protocol — `rotateIdentityKeys()` with crash-safe staged promotion
-- [ ] Automated key rotation schedule + contact notification + old-key grace period
+- [ ] Automated key rotation schedule + old-key grace period
 - [ ] Reproducible builds
 
 ## Abuse Controls
