@@ -100,6 +100,7 @@ async def send_message(
             await send_push_notification(
                 fcm_token=recipient.fcm_token,
                 recipient_id=request.recipient_id,
+                sender_id=x_user_id,
             )
 
     return SendMessageResponse(message_id=message_id, timestamp=timestamp_ms)

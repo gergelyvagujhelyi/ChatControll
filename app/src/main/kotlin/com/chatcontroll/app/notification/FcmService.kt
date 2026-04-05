@@ -49,7 +49,7 @@ class FcmService : FirebaseMessagingService() {
 
                 // Show a generic notification — content comes from local decryption
                 val senderId = message.data["senderId"] ?: "Unknown"
-                val conversationId = message.data["conversationId"] ?: return@launch
+                val conversationId = message.data["conversationId"]
 
                 notificationManager.showMessageNotification(
                     senderId = senderId,

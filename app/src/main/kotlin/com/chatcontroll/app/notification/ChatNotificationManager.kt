@@ -59,7 +59,7 @@ class ChatNotificationManager @Inject constructor(
         senderId: String,
         senderName: String,
         messageBody: String,
-        conversationId: String,
+        conversationId: String? = null,
     ) {
         if (!hasNotificationPermission()) return
 
@@ -81,13 +81,17 @@ class ChatNotificationManager @Inject constructor(
 
         val deepLinkIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_CONVERSATION_ID, conversationId)
-            putExtra(EXTRA_CONTACT_ID, senderId)
+            if (conversationId != null) {
+                putExtra(EXTRA_CONVERSATION_ID, conversationId)
+                putExtra(EXTRA_CONTACT_ID, senderId)
+            }
         }
+
+        val notificationId = conversationId?.hashCode() ?: senderId.hashCode()
 
         val pendingIntent = PendingIntent.getActivity(
             context,
-            conversationId.hashCode(),
+            notificationId,
             deepLinkIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -104,7 +108,7 @@ class ChatNotificationManager @Inject constructor(
             .build()
 
         NotificationManagerCompat.from(context)
-            .notify(conversationId.hashCode(), notification)
+            .notify(notificationId, notification)
     }
 
     fun cancelNotification(conversationId: String) {
