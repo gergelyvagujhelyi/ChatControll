@@ -1,6 +1,9 @@
 package com.chatcontroll.app.ui.navigation
 
+import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -47,6 +50,11 @@ fun ChatNavGraph(
         }
 
         composable(Routes.CONVERSATIONS) {
+            // Intercept system back so it finishes the activity instead of
+            // popping the start destination and leaving an empty NavHost.
+            val activity = LocalContext.current as? Activity
+            BackHandler { activity?.finish() }
+
             ConversationsScreen(
                 onConversationClick = { conversationId, contactId ->
                     navController.navigate(Routes.chat(conversationId, contactId))
@@ -68,7 +76,13 @@ fun ChatNavGraph(
             ),
         ) {
             ChatScreen(
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate(Routes.CONVERSATIONS) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
+                },
                 onCallClick = { contactId, displayName ->
                     navController.navigate(Routes.call(contactId, displayName))
                 },
