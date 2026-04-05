@@ -166,6 +166,8 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 10. **Call signaling reliability (v0.3.7)** — Call signals now fall back to FCM push when the recipient's WebSocket is disconnected. The server buffers undelivered signals (30s TTL) and flushes them when the recipient reconnects. The caller sees "Contact unavailable" after a 35s ringing timeout instead of ringing indefinitely. Hangup/reject UI responds instantly (signal sent fire-and-forget in background).
 
+11. **Call to new contacts (v0.3.8)** — Calls to newly added contacts now work even before any messages have been exchanged. The recipient fetches the caller's key bundle from the server on demand, verifies the call signal signature, and only then persists the contact locally.
+
 ## Next Priorities
 
 1. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.

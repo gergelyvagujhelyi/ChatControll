@@ -106,10 +106,10 @@ The FCM push token is tied to the device's Google account. A sophisticated adver
 Messages are signed with Ed25519 before sending. The recipient verifies the signature against the sender's stored public signing key before decryption. Messages from older clients without signatures are still accepted for backward compatibility.
 
 ### Call Signal Authentication (v0.3.1+)
-Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519. The recipient verifies the signature against the sender's stored public signing key before processing. This prevents call signal injection by a compromised relay server.
+Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519. The recipient verifies the signature against the sender's public signing key before processing. This prevents call signal injection by a compromised relay server. Since v0.3.8, if the sender is not yet a local contact (e.g. newly added contact with no prior messages), the key bundle is fetched from the server and the contact is persisted only after signature verification succeeds.
 
 ### Signature Verification Robustness (v0.3.1+)
-When a signed message arrives from an unknown sender, the client attempts to establish a session (fetching the sender's key bundle) before verification. If the sender cannot be resolved, the message is silently dropped. This closes a bypass where signed messages from unknown contacts could skip verification.
+When a signed message or call signal arrives from an unknown sender, the client fetches the sender's key bundle from the server before verification. If the sender cannot be resolved, the signal is silently dropped. For call signals, the fetched contact is kept in memory during verification and only persisted to the database after the signature is confirmed valid (v0.3.8).
 
 ### PQC Negotiation & Downgrade Protection (v0.3.4+)
 - **Symmetric encapsulation**: Either party can initiate ML-KEM-768 encapsulation. If a message carries KEM ciphertext, the recipient decapsulates; otherwise, the recipient encapsulates toward the sender's public encapsulation key. This eliminates the prior bug where only the lexicographic initiator could start a hybrid session.
@@ -119,10 +119,11 @@ When a signed message arrives from an unknown sender, the client attempts to est
 ### Base64 Input Validation (v0.3.4+)
 All `Base64.decode` calls on externally-received data (key bundles, KEM ciphertext, message envelopes) are wrapped in try/catch. Malformed Base64 from the server or a peer is logged and rejected rather than crashing the app.
 
-### Call Signal Reliability (v0.3.4–0.3.7)
+### Call Signal Reliability (v0.3.4–0.3.8)
 Call signaling has been progressively hardened:
 - **v0.3.4**: `rejectCall()` and `hangup()` send the signaling message before tearing down local call state, so the peer always receives reject/hangup.
 - **v0.3.7**: Call signals now have FCM push fallback and server-side buffering (30s TTL) for offline recipients. The client checks the `delivered` field from `CallSignalResponse` instead of assuming delivery on HTTP success. `sendSignal()` only retries on network errors — if the server accepted but couldn't deliver (recipient offline), the signal is already buffered and FCM push is sent, so client retries would be redundant. `hangup()`/`rejectCall()` end the call UI immediately and send the signal fire-and-forget in the background (no UI blocking). A 35s ringing timeout ends unanswered calls with `UNAVAILABLE` status.
+- **v0.3.8**: Calls to newly added contacts (no prior messages) no longer silently fail. Unknown callers are resolved by fetching their key bundle from the server, with signature verification before persisting the contact. Contact resolution runs outside the signal mutex to avoid blocking ICE candidate processing during network requests.
 
 ### Certificate Pinning
 Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry.
