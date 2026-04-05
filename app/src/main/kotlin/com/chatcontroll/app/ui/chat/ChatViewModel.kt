@@ -50,6 +50,9 @@ class ChatViewModel @Inject constructor(
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError.asStateFlow()
 
+    private val _isReEstablishing = MutableStateFlow(false)
+    val isReEstablishing: StateFlow<Boolean> = _isReEstablishing.asStateFlow()
+
     init {
         // Clear unread badge when conversation is opened
         viewModelScope.launch {
@@ -74,6 +77,10 @@ class ChatViewModel @Inject constructor(
     fun send() {
         val text = _composerText.value.trim()
         if (text.isBlank()) return
+        if (conversation.value?.needsSessionReset == true) {
+            _sendError.value = "Session expired. Tap \"Re-establish session\" first."
+            return
+        }
 
         _composerText.value = ""
         _sendError.value = null
@@ -83,6 +90,20 @@ class ChatViewModel @Inject constructor(
                 .onFailure { e ->
                     _sendError.value = "Failed to send message"
                 }
+        }
+    }
+
+    fun reEstablishSession() {
+        _isReEstablishing.value = true
+        _sendError.value = null
+        viewModelScope.launch {
+            try {
+                messageRepository.reEstablishSession(contactId)
+            } catch (e: Exception) {
+                _sendError.value = "Failed to re-establish session. Try again."
+            } finally {
+                _isReEstablishing.value = false
+            }
         }
     }
 

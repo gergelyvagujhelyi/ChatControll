@@ -1,6 +1,9 @@
 package com.chatcontroll.app.ui.chat
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -18,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,7 +60,9 @@ fun ChatScreen(
     val conversation by viewModel.conversation.collectAsState()
     val composerText by viewModel.composerText.collectAsState()
     val sendError by viewModel.sendError.collectAsState()
+    val isReEstablishing by viewModel.isReEstablishing.collectAsState()
     val encryptionInfo = viewModel.encryptionInfo
+    val needsSessionReset = conversation?.needsSessionReset == true
 
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
@@ -156,6 +162,41 @@ fun ChatScreen(
                 }
             }
 
+            // Session reset banner
+            if (needsSessionReset) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .clickable(enabled = !isReEstablishing) { viewModel.reEstablishSession() }
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (isReEstablishing) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Text(
+                                text = "Re-establishing secure session...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "Peer rotated keys. Tap to re-establish session.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+            }
+
             // Composer
             Row(
                 modifier = Modifier
@@ -167,7 +208,10 @@ fun ChatScreen(
                     value = composerText,
                     onValueChange = viewModel::updateComposer,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message") },
+                    enabled = !needsSessionReset,
+                    placeholder = {
+                        Text(if (needsSessionReset) "Session expired" else "Message")
+                    },
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
@@ -178,12 +222,12 @@ fun ChatScreen(
 
                 IconButton(
                     onClick = viewModel::send,
-                    enabled = composerText.isNotBlank(),
+                    enabled = composerText.isNotBlank() && !needsSessionReset,
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send",
-                        tint = if (composerText.isNotBlank()) {
+                        tint = if (composerText.isNotBlank() && !needsSessionReset) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)

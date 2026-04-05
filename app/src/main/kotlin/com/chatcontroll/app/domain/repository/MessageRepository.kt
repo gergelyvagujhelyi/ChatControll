@@ -12,4 +12,5 @@ interface MessageRepository {
     suspend fun deleteMessage(messageId: String)
     suspend fun deleteMessagesOlderThan(conversationId: String, timestampMillis: Long)
     suspend fun fetchPendingFromServer()
+    suspend fun reEstablishSession(contactId: String)
 }

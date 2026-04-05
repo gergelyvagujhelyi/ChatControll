@@ -147,6 +147,20 @@ class KeyManager @Inject constructor(
         return restored
     }
 
+    fun clearSessionForPeer(peerId: String) {
+        val sessionId = sessionCache.remove(peerId)?.sessionId
+            ?: encryptedPrefs.getString(SESSION_PREFIX + peerId, null)
+        encryptedPrefs.edit()
+            .remove(SESSION_PREFIX + peerId)
+            .remove(SEND_KEY_PREFIX + peerId)
+            .remove(RECV_KEY_PREFIX + peerId)
+            .remove(PQC_PREFIX + peerId)
+            .apply()
+        if (sessionId != null) {
+            removeRatchetState(sessionId)
+        }
+    }
+
     fun clearSessionCache() {
         sessionCache.clear()
         // Also remove persisted session keys so getCachedSessionKeys()
