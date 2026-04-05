@@ -234,7 +234,8 @@ class CallManager @Inject constructor(
     fun rejectCall() {
         val state = _callState.value ?: return
         scope.launch {
-            sendSignal(state.peerId, "call_reject", state.callId, "")
+            val delivered = sendSignal(state.peerId, "call_reject", state.callId, "")
+            if (!delivered) logWarn("Reject signal not delivered — peer may not know call was declined")
             endCall(CallStatus.REJECTED)
         }
     }
@@ -242,7 +243,8 @@ class CallManager @Inject constructor(
     fun hangup() {
         val state = _callState.value ?: return
         scope.launch {
-            sendSignal(state.peerId, "call_hangup", state.callId, "")
+            val delivered = sendSignal(state.peerId, "call_hangup", state.callId, "")
+            if (!delivered) logWarn("Hangup signal not delivered — peer may not know call ended")
             endCall(CallStatus.ENDED)
         }
     }
@@ -403,28 +405,39 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String) {
+    /**
+     * Send a call signal to the peer. Retries up to [SIGNAL_SEND_RETRIES] times
+     * so that termination signals (hangup/reject) have the best chance of delivery.
+     * Returns true if the signal was delivered, false if all attempts failed.
+     */
+    private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String): Boolean {
         val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, payload) else ""
-        val senderId = keyManager.getUserId() ?: return
+        val senderId = keyManager.getUserId() ?: return false
         val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(peerId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(signalType.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(callId.toByteArray(Charsets.UTF_8)) +
             encrypted.toByteArray(Charsets.UTF_8)
         val signature = Base64.encodeToString(keyManager.sign(sigPayload), Base64.NO_WRAP)
-        try {
-            apiService.sendCallSignal(
-                CallSignalRequest(
-                    recipientId = peerId,
-                    signalType = signalType,
-                    callId = callId,
-                    encryptedPayload = encrypted,
-                    signature = signature,
-                )
-            )
-        } catch (e: Exception) {
-            logError("Failed to send signal $signalType", e)
+        val request = CallSignalRequest(
+            recipientId = peerId,
+            signalType = signalType,
+            callId = callId,
+            encryptedPayload = encrypted,
+            signature = signature,
+        )
+        repeat(SIGNAL_SEND_RETRIES) { attempt ->
+            try {
+                apiService.sendCallSignal(request)
+                return true
+            } catch (e: Exception) {
+                logError("Failed to send signal $signalType (attempt ${attempt + 1}/$SIGNAL_SEND_RETRIES)", e)
+                if (attempt < SIGNAL_SEND_RETRIES - 1) {
+                    kotlinx.coroutines.delay(500L * (attempt + 1))
+                }
+            }
         }
+        return false
     }
 
     /**
@@ -576,6 +589,7 @@ class CallManager @Inject constructor(
         private const val MAX_PENDING_ICE_CANDIDATES = 100
         private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_SEEN_SIGNATURES = 500
+        private const val SIGNAL_SEND_RETRIES = 3
     }
 }
 
