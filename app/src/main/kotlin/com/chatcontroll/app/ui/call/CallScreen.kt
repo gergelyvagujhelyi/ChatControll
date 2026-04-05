@@ -53,14 +53,15 @@ fun CallScreen(
     val context = LocalContext.current
     val callState by viewModel.callState.collectAsState()
 
-    // Request RECORD_AUDIO permission before starting any call.
-    // On grant: start outgoing call or accept pending incoming call.
+    // Permission launcher — shared by outgoing auto-start and incoming Accept button.
+    // The callback checks current state to decide what to do after grant.
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
             val state = viewModel.callState.value
             if (state?.direction == CallDirection.INCOMING && state.status == CallStatus.RINGING) {
+                // User pressed Accept → permission dialog → granted → accept the call
                 viewModel.acceptCall()
             } else {
                 viewModel.onMicPermissionGranted()
@@ -68,11 +69,16 @@ fun CallScreen(
         }
     }
 
+    // For outgoing calls: request permission immediately so the call can start.
+    // For incoming calls: skip — let the user see who's calling first.
+    // The Accept button handles permission when they choose to answer.
     LaunchedEffect(Unit) {
+        val state = viewModel.callState.value
+        if (state?.direction == CallDirection.INCOMING) return@LaunchedEffect
+
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
             == PackageManager.PERMISSION_GRANTED
         ) {
-            // Already granted — start the call immediately
             viewModel.onMicPermissionGranted()
         } else {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -115,6 +121,15 @@ fun CallScreen(
                 style = MaterialTheme.typography.headlineLarge,
                 textAlign = TextAlign.Center,
             )
+            if (callState?.isNewContact == true) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Unknown contact",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = statusText(callState?.status, callState?.direction),

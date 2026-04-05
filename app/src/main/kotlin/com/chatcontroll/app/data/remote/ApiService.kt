@@ -47,4 +47,5 @@ interface ApiService {
     suspend fun sendCallSignal(request: CallSignalRequest): CallSignalResponse
     suspend fun getIceServers(): IceServersResponse
     suspend fun rotateKeys(request: KeyRotationRequest): KeyRotationResponse
+    suspend fun deleteIdentity()
 }

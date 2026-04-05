@@ -43,7 +43,12 @@ class WebSocketManager:
         await self.register(user_id, websocket)
 
     async def register(self, user_id: str, websocket: WebSocket) -> None:
-        """Register an already-accepted WebSocket, enforcing per-user cap."""
+        """Register an already-accepted WebSocket, enforcing per-user cap.
+
+        NOTE: Does NOT flush pending signals — the caller must send auth_ok
+        first, then call flush_pending_signals(). Otherwise the client
+        receives a call signal where it expects auth_ok and disconnects.
+        """
         async with self._lock:
             if len(self._connections[user_id]) >= MAX_WS_CONNECTIONS_PER_USER:
                 # Evict the oldest (first-inserted) connection
@@ -54,9 +59,6 @@ class WebSocketManager:
                     pass
             self._connections[user_id][websocket] = None
         logger.info("WebSocket connected: %s", user_id[:8])
-
-        # Deliver any pending call signals that were queued while offline
-        await self._flush_pending_signals(user_id, websocket)
 
     async def disconnect(self, user_id: str, websocket: WebSocket) -> None:
         async with self._lock:
@@ -116,7 +118,7 @@ class WebSocketManager:
                 pass
         logger.info("All WebSocket connections closed for shutdown")
 
-    async def _flush_pending_signals(self, user_id: str, websocket: WebSocket) -> None:
+    async def flush_pending_signals(self, user_id: str, websocket: WebSocket) -> None:
         """Deliver pending call signals to a newly connected user."""
         now = time.monotonic()
         signals = self._pending_call_signals.pop(user_id, [])

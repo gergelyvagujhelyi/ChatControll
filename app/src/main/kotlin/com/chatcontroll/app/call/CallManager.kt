@@ -22,7 +22,6 @@ import com.chatcontroll.app.domain.model.CallState
 import com.chatcontroll.app.domain.model.CallStatus
 import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.domain.repository.CryptoEngine
-import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.nio.ByteBuffer
@@ -56,6 +55,7 @@ class CallManager @Inject constructor(
     private val apiService: ApiService,
     private val keyManager: KeyManager,
     private val cryptoEngine: CryptoEngine,
+    private val classicalKeyAgreement: com.chatcontroll.app.crypto.ClassicalKeyAgreement,
     private val webSocketClient: WebSocketClient,
     private val contactDao: com.chatcontroll.app.data.local.dao.ContactDao,
     private val messageDao: MessageDao,
@@ -83,6 +83,8 @@ class CallManager @Inject constructor(
     private var ringingTimeoutJob: Job? = null
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     private var remoteDescriptionSet = false
+    /** Per-call cache of derived session keys — cleared in endCall(). */
+    private val _callSessionKeys = mutableMapOf<String, SessionKeys>()
     /** Track seen signal signatures with timestamps to reject replays.
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
      *  Insertion order (accessOrder=false) so time-based eviction is correct. */
@@ -166,10 +168,17 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 logDebug("Signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
-                // Signature verified — now safe to persist the new contact
-                if (needsPersist) {
+                // For known contacts, no persistence needed.
+                // For unknown contacts calling us, defer persistence until the
+                // user explicitly accepts the call (see acceptCall).
+                if (needsPersist && signal.signalType != "call_offer") {
+                    // Non-offer signals (ICE, hangup) for an already-ringing call
+                    // from a new contact — persist now since the offer was accepted.
                     contactDao.upsert(contact)
                     logDebug("Persisted new contact ${signal.senderId.take(8)}")
+                } else if (needsPersist) {
+                    _pendingNewContact = contact
+                    logDebug("Deferring contact persistence for ${signal.senderId.take(8)} until call accepted")
                 }
                 verifiedContact = contact
             } catch (e: Exception) {
@@ -197,7 +206,7 @@ class CallManager @Inject constructor(
                     seenSignalSignatures.remove(seenSignalSignatures.keys.first())
                 }
                 when (signal.signalType) {
-                    "call_offer" -> handleOffer(signal, verifiedContact)
+                    "call_offer" -> handleOffer(signal, verifiedContact, isNewContact = _pendingNewContact != null)
                     "call_answer" -> handleAnswer(signal)
                     "call_ice_candidate" -> handleIceCandidate(signal)
                     "call_hangup", "call_reject", "call_busy" -> {
@@ -220,7 +229,11 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun handleOffer(signal: CallSignalDto, contact: com.chatcontroll.app.data.local.entity.ContactEntity) {
+    private suspend fun handleOffer(
+        signal: CallSignalDto,
+        contact: com.chatcontroll.app.data.local.entity.ContactEntity,
+        isNewContact: Boolean = false,
+    ) {
         if (_callState.value != null) {
             // Already in a call — send busy
             sendSignal(signal.senderId, "call_busy", signal.callId, "")
@@ -234,6 +247,7 @@ class CallManager @Inject constructor(
             peerDisplayName = displayName,
             direction = CallDirection.INCOMING,
             status = CallStatus.RINGING,
+            isNewContact = isNewContact,
         )
         _pendingOfferPayload = signal.encryptedPayload
     }
@@ -242,18 +256,34 @@ class CallManager @Inject constructor(
         val state = _callState.value ?: return
         if (state.direction != CallDirection.INCOMING || state.status != CallStatus.RINGING) return
 
-        _callState.value = state.copy(status = CallStatus.CONNECTING)
+        _callState.value = state.copy(status = CallStatus.CONNECTING, isNewContact = false)
 
         scope.launch {
+            // Persist the new contact now that the user has approved the call
+            _pendingNewContact?.let { contact ->
+                contactDao.upsert(contact)
+                logDebug("Persisted new contact ${contact.userId.take(8)} on call accept")
+                _pendingNewContact = null
+            }
+
             signalMutex.withLock {
             try {
-                logDebug("Accepting incoming call")
+                val offerPayload = _pendingOfferPayload
+                if (offerPayload == null) {
+                    logError("No pending offer payload — cannot accept call", null)
+                    endCall(CallStatus.FAILED)
+                    return@withLock
+                }
+
+                logDebug("Setting up WebRTC...")
                 setupWebRtc(state.peerId)
+                logDebug("WebRTC setup complete")
 
                 // Decrypt the offer SDP
-                val sdpJson = decryptPayload(state.peerId, state.callId, _pendingOfferPayload ?: return@withLock)
+                logDebug("Decrypting offer payload (${offerPayload.length} chars)...")
+                val sdpJson = decryptPayload(state.peerId, state.callId, offerPayload)
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
-                logDebug("Decoded offer SDP")
+                logDebug("Decoded offer SDP (${sdpPayload.sdp.length} chars)")
 
                 // Apply pending ICE candidates after setting remote description
                 val answerSdp = webRtcEngine!!.handleRemoteOffer(sdpPayload.sdp)
@@ -271,8 +301,12 @@ class CallManager @Inject constructor(
 
                 requestAudioFocus()
             } catch (e: Exception) {
-                logError("Failed to accept call", e)
+                logError("Failed to accept call: ${e::class.simpleName}: ${e.message}", e)
                 endCall(CallStatus.FAILED)
+                // Notify the caller so they stop ringing
+                try {
+                    sendSignal(state.peerId, "call_hangup", state.callId, "")
+                } catch (_: Exception) { }
             }
             } // signalMutex
         }
@@ -311,6 +345,8 @@ class CallManager @Inject constructor(
     }
 
     private var _pendingOfferPayload: String? = null
+    /** Contact fetched from the server for an unknown caller — persisted only on accept. */
+    private var _pendingNewContact: com.chatcontroll.app.data.local.entity.ContactEntity? = null
 
     private fun startRingingTimeout(callId: String) {
         ringingTimeoutJob?.cancel()
@@ -373,8 +409,14 @@ class CallManager @Inject constructor(
         val engine = webRtcEngine
         webRtcEngine = null
         _pendingOfferPayload = null
+        _pendingNewContact = null
         pendingIceCandidates.clear()
         remoteDescriptionSet = false
+        _callSessionKeys.values.forEach { keys ->
+            keys.sendKey.fill(0)
+            keys.receiveKey.fill(0)
+        }
+        _callSessionKeys.clear()
         abandonAudioFocus()
 
         // Dispose WebRTC resources off the main thread to avoid ANR
@@ -647,44 +689,69 @@ class CallManager @Inject constructor(
     }
 
     /**
-     * Ensure session keys exist for [peerId].
+     * Derive call session keys for [peerId] from current identity keys.
      *
-     * After app restart, persisted key material is restored from
-     * EncryptedSharedPreferences. A new session is only established
-     * if no prior session exists at all, avoiding overwrite of the
-     * persisted ratchet state (which would desync message crypto).
+     * Call keys are derived independently from the messaging Double Ratchet
+     * to avoid corrupting ratchet state. Both sides compute the same keys
+     * because:
+     * 1. X25519 shared secret is symmetric (A·B == B·A)
+     * 2. HKDF is deterministic
+     * 3. Role assignment uses lexicographic comparison of public keys
+     *
+     * Keys are cached per-call to avoid redundant API calls for ICE
+     * candidates. The cache is cleared in [endCall].
      */
     private suspend fun ensureSessionKeys(peerId: String): SessionKeys {
-        keyManager.getCachedSessionKeys(peerId)?.let { cached ->
-            if (cached.sendKey.isNotEmpty() && cached.receiveKey.isNotEmpty()) return cached
-        }
+        // Fast path: already derived for this peer during this call
+        _callSessionKeys[peerId]?.let { return it }
 
-        logDebug("No session keys for $peerId, establishing new session")
         val bundle = apiService.fetchKeyBundle(peerId)
             ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
+        val remotePubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+
         val localKeyPair = keyManager.loadIdentityKeyPair()
             ?: throw IllegalStateException("No local identity key pair")
 
-        val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
-        val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
-        val pqcKey = if (bundle.pqcEncapsulationKey.isNotEmpty()) {
-            Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
-        } else {
-            ByteArray(0)
-        }
-
-        // Don't pass PQC key without inbound KEM ciphertext — both sides would
-        // independently encapsulate, producing different shared secrets. Match the
-        // messaging path: PQC only when decapsulating an inbound KEM.
-        val sessionKeys = cryptoEngine.establishSession(
-            localIdentity = localKeyPair,
-            remotePublicBundle = PublicKeyBundle(
-                publicSigningKey = pubSignKey,
-                publicIdentityKey = pubIdKey,
-                pqcEncapsulationKey = ByteArray(0),
-            ),
+        // X25519 shared secret
+        val classicalSecret = classicalKeyAgreement.agree(
+            privateKey = localKeyPair.privateIdentityKey,
+            remotePublicKey = remotePubIdKey,
         )
-        keyManager.cacheSessionKeys(peerId, sessionKeys)
+
+        // Derive base shared secret (same HKDF as RatchetSessionManager, no PQC)
+        val sharedSecret = hkdfSha256(
+            ikm = classicalSecret,
+            salt = "ChatControll-v1-ratchet-init".toByteArray(Charsets.UTF_8),
+            info = "hybrid-key-establishment".toByteArray(Charsets.UTF_8),
+            length = 32,
+        )
+        classicalSecret.fill(0)
+
+        // Derive bidirectional chain keys
+        val chainMaterial = hkdfSha256(
+            ikm = sharedSecret,
+            salt = "ChatControll-v1-chains".toByteArray(Charsets.UTF_8),
+            info = "bidirectional-chains".toByteArray(Charsets.UTF_8),
+            length = 64,
+        )
+        sharedSecret.fill(0)
+
+        val chainA = chainMaterial.copyOfRange(0, 32)
+        val chainB = chainMaterial.copyOfRange(32, 64)
+        chainMaterial.fill(0)
+
+        // Deterministic role: same comparison as RatchetSessionManager
+        val isInitiator = localKeyPair.publicIdentityKey.toCallHex() < remotePubIdKey.toCallHex()
+
+        val sessionKeys = SessionKeys(
+            sendKey = if (isInitiator) chainA else chainB,
+            receiveKey = if (isInitiator) chainB else chainA,
+            sessionId = "call-${peerId.take(16)}",
+            pqcEstablished = false,
+        )
+
+        _callSessionKeys[peerId] = sessionKeys
+        logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
         return sessionKeys
     }
 
@@ -803,6 +870,8 @@ class CallManager @Inject constructor(
 private fun lengthPrefixed(data: ByteArray): ByteArray {
     return ByteBuffer.allocate(4).putInt(data.size).array() + data
 }
+
+private fun ByteArray.toCallHex(): String = joinToString("") { "%02x".format(it) }
 
 @Serializable
 private data class SdpPayload(val sdp: String)
