@@ -3,6 +3,8 @@ package com.chatcontroll.app.di
 import android.content.Context
 import android.util.Log
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.data.local.AppDatabase
 import com.chatcontroll.app.data.local.dao.ContactDao
@@ -51,6 +53,14 @@ object DatabaseModule {
     var databaseWasReset: Boolean = false
         private set
 
+    /** v1→v2: add pqcEstablished and signatureRequired columns to contacts. */
+    private val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE contacts ADD COLUMN pqcEstablished INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE contacts ADD COLUMN signatureRequired INTEGER NOT NULL DEFAULT 1")
+        }
+    }
+
     private fun buildDatabase(context: Context, factory: SupportOpenHelperFactory): AppDatabase {
         return Room.databaseBuilder(
             context,
@@ -58,6 +68,8 @@ object DatabaseModule {
             DB_NAME,
         )
             .openHelperFactory(factory)
+            .addMigrations(MIGRATION_1_2)
+            .fallbackToDestructiveMigration()
             .build()
     }
 

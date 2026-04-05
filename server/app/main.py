@@ -70,10 +70,9 @@ def _get_local_ip() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start services. In debug mode, auto-create tables; in production use Alembic."""
-    if DEBUG:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    """Start services and ensure database tables exist."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     turn_transport = None
     if TURN_ENABLED:
