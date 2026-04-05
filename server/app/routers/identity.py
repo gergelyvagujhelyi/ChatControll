@@ -157,9 +157,16 @@ async def rotate_keys(
         raise HTTPException(status_code=400, detail="Invalid base64 in key rotation request")
 
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives.serialization import load_der_public_key
     from cryptography.exceptions import InvalidSignature
     try:
-        new_pub_key = Ed25519PublicKey.from_public_bytes(new_pub_bytes)
+        try:
+            new_pub_key = Ed25519PublicKey.from_public_bytes(new_pub_bytes)
+        except Exception:
+            # Fallback: Bouncy Castle exports SPKI/DER format (44 bytes)
+            new_pub_key = load_der_public_key(new_pub_bytes)
+            if not isinstance(new_pub_key, Ed25519PublicKey):
+                raise ValueError("Not an Ed25519 key")
         new_pub_key.verify(proof_sig, request.public_signing_key.encode("utf-8"))
     except (InvalidSignature, Exception):
         raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
