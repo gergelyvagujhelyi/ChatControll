@@ -227,16 +227,16 @@ class CallManager @Inject constructor(
         val state = _callState.value ?: return
         scope.launch {
             sendSignal(state.peerId, "call_reject", state.callId, "")
+            endCall(CallStatus.REJECTED)
         }
-        endCall(CallStatus.REJECTED)
     }
 
     fun hangup() {
         val state = _callState.value ?: return
         scope.launch {
             sendSignal(state.peerId, "call_hangup", state.callId, "")
+            endCall(CallStatus.ENDED)
         }
-        endCall(CallStatus.ENDED)
     }
 
     fun toggleMute() {

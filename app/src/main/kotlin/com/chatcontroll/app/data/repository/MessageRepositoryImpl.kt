@@ -327,10 +327,25 @@ class MessageRepositoryImpl @Inject constructor(
             val bundle = apiService.fetchKeyBundle(remoteUserId) ?: return null
             val localKeyPair = keyManager.loadIdentityKeyPair() ?: return null
 
-            val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
-            val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+            val pubIdKey = try {
+                Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+            } catch (e: IllegalArgumentException) {
+                android.util.Log.e("MessageRepo", "Malformed Base64 in identity key for ${remoteUserId.take(8)}", e)
+                return null
+            }
+            val pubSignKey = try {
+                Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+            } catch (e: IllegalArgumentException) {
+                android.util.Log.e("MessageRepo", "Malformed Base64 in signing key for ${remoteUserId.take(8)}", e)
+                return null
+            }
             val pqcKey = if (bundle.pqcEncapsulationKey.isNotEmpty()) {
-                Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
+                try {
+                    Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
+                } catch (e: IllegalArgumentException) {
+                    android.util.Log.e("MessageRepo", "Malformed Base64 in PQC key for ${remoteUserId.take(8)}", e)
+                    return null
+                }
             } else ByteArray(0)
 
             // Only pass PQC key when we have inbound KEM ciphertext to decapsulate.
@@ -368,8 +383,9 @@ class MessageRepositoryImpl @Inject constructor(
 
                 if (existingContact.pqcEstablished && !sessionKeys.pqcEstablished) {
                     android.util.Log.w("MessageRepo",
-                        "PQC DOWNGRADE for ${remoteUserId.take(8)}: " +
-                        "session was hybrid PQ, now classical only")
+                        "PQC DOWNGRADE REJECTED for ${remoteUserId.take(8)}: " +
+                        "contact was hybrid PQ, refusing classical-only session")
+                    return null
                 } else if (sessionKeys.pqcEstablished && !existingContact.pqcEstablished) {
                     contactDao.upsert(existingContact.copy(pqcEstablished = true))
                 }

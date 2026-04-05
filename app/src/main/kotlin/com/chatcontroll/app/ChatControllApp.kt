@@ -9,8 +9,13 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.chatcontroll.app.data.remote.WebSocketClient
+import com.chatcontroll.app.data.repository.IdentityRepositoryImpl
 import com.chatcontroll.app.worker.SyncWorker
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
@@ -22,6 +27,9 @@ class ChatControllApp : Application(), Configuration.Provider {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var webSocketClient: WebSocketClient
+    @Inject lateinit var identityRepository: IdentityRepositoryImpl
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -38,6 +46,9 @@ class ChatControllApp : Application(), Configuration.Provider {
 
         // Initialize SQLCipher native library
         System.loadLibrary("sqlcipher")
+
+        // Recover from interrupted key rotation before any identity access
+        appScope.launch { identityRepository.recoverFromInterruptedKeyRotation() }
 
         scheduleSyncWorker()
 

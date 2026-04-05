@@ -51,7 +51,6 @@ class IdentityRepositoryImpl @Inject constructor(
     }
 
     override suspend fun getIdentity(): Identity? {
-        recoverFromInterruptedKeyRotation()
         val keyPair = keyManager.loadIdentityKeyPair() ?: return null
         val userId = keyManager.getUserId() ?: return null
         val shareCode = keyManager.getShareCode()
@@ -124,8 +123,16 @@ class IdentityRepositoryImpl @Inject constructor(
         val resolved = apiService.resolveShareCode(shareCode)
             ?: throw IllegalArgumentException("Unknown share code")
 
-        val pubIdKey = Base64.decode(resolved.publicIdentityKey, Base64.NO_WRAP)
-        val pubSignKey = Base64.decode(resolved.publicSigningKey, Base64.NO_WRAP)
+        val pubIdKey = try {
+            Base64.decode(resolved.publicIdentityKey, Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalStateException("Malformed Base64 in identity key for ${resolved.userId.take(8)}", e)
+        }
+        val pubSignKey = try {
+            Base64.decode(resolved.publicSigningKey, Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalStateException("Malformed Base64 in signing key for ${resolved.userId.take(8)}", e)
+        }
 
         val contact = Contact(
             userId = resolved.userId,
@@ -149,7 +156,11 @@ class IdentityRepositoryImpl @Inject constructor(
             ?: throw IllegalStateException("No local identity")
 
         val pqcKey = if (resolved.pqcEncapsulationKey.isNotEmpty()) {
-            Base64.decode(resolved.pqcEncapsulationKey, Base64.NO_WRAP)
+            try {
+                Base64.decode(resolved.pqcEncapsulationKey, Base64.NO_WRAP)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalStateException("Malformed Base64 in PQC key for ${resolved.userId.take(8)}", e)
+            }
         } else {
             ByteArray(0)
         }
