@@ -130,9 +130,9 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] Per-challenge TURN nonce rotation (RFC 5389 compliant)
 - [x] ICE candidate bounds (max 100 pending per call)
 - [x] Certificate pinning with real SPKI hashes
-- [ ] Ratchet state persistence (survive app restart)
+- [ ] Ratchet state persistence (survive app restart) — `RatchetSessionManager` persists state to EncryptedSharedPreferences; session mapping survives restart but in-memory ratchet chain is re-keyed. Full DB-backed persistence is still needed.
 - [ ] Push proxy to break FCM linkability
-- [ ] Key rotation protocol
+- [ ] Key rotation protocol — `rotateIdentityKeys()` exists with crash-safe staged promotion, but no automated schedule, contact notification, or old-key grace period.
 - [ ] Reproducible builds
 
 ## Abuse Controls

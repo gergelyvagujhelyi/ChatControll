@@ -9,6 +9,10 @@ class Converters {
         Base64.encodeToString(value, Base64.NO_WRAP)
 
     @TypeConverter
-    fun toByteArray(value: String): ByteArray =
+    fun toByteArray(value: String): ByteArray = try {
         Base64.decode(value, Base64.NO_WRAP)
+    } catch (e: IllegalArgumentException) {
+        android.util.Log.e("Converters", "Invalid Base64 in database column", e)
+        ByteArray(0)
+    }
 }

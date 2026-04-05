@@ -112,7 +112,11 @@ class DoubleRatchet(
      * Decrypt a received message, performing DH ratchet steps as needed.
      */
     fun decrypt(state: RatchetState, header: RatchetHeader, ciphertext: ByteArray): ByteArray {
-        val senderPublicKey = Base64.decode(header.publicKey, Base64.NO_WRAP)
+        val senderPublicKey = try {
+            Base64.decode(header.publicKey, Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            throw SecurityException("Invalid Base64 in ratchet header public key", e)
+        }
 
         // Check if this message key was previously skipped
         val skippedMapKey = senderPublicKey.toHex() to header.messageNumber

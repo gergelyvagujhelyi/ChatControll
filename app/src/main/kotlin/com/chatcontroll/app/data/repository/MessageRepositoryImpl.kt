@@ -266,17 +266,17 @@ class MessageRepositoryImpl @Inject constructor(
                         } catch (retryEx: Exception) {
                             android.util.Log.e("MessageRepo",
                                 "Decrypt failed after PQC re-establish from ${dto.senderId}: ${retryEx.message}", retryEx)
-                            countDecryptFailure(dto.messageId, receivedIds)
+                            countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                             continue
                         }
                     } else {
                         android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
-                        countDecryptFailure(dto.messageId, receivedIds)
+                        countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                         continue
                     }
                 } else {
                     android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
-                    countDecryptFailure(dto.messageId, receivedIds)
+                    countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                     continue
                 }
             }
@@ -405,11 +405,34 @@ class MessageRepositoryImpl @Inject constructor(
         return id
     }
 
-    private fun countDecryptFailure(messageId: String, receivedIds: MutableList<String>) {
+    private suspend fun countDecryptFailure(
+        messageId: String,
+        senderId: String,
+        localUserId: String,
+        envelope: EncryptedEnvelope,
+        timestamp: Long,
+        receivedIds: MutableList<String>,
+    ) {
         val failures = (decryptFailCounts[messageId] ?: 0) + 1
         decryptFailCounts[messageId] = failures
         if (failures >= MAX_DECRYPT_RETRIES) {
+            // Permanently failed — store as DECRYPT_FAILED so the user
+            // sees a tombstone instead of silently losing the message.
             android.util.Log.w("MessageRepo", "Giving up on message $messageId after $failures attempts")
+            val conversationId = getOrCreateConversationId(senderId)
+            messageDao.insert(MessageEntity(
+                id = messageId,
+                conversationId = conversationId,
+                senderId = senderId,
+                recipientId = localUserId,
+                encryptedBody = envelope.ciphertext,
+                nonce = envelope.nonce,
+                plaintext = "",
+                state = MessageState.DECRYPT_FAILED.name,
+                timestamp = timestamp,
+                expiresAt = null,
+                isOutgoing = false,
+            ))
             receivedIds.add(messageId)
             decryptFailCounts.remove(messageId)
         }

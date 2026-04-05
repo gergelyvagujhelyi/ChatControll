@@ -33,15 +33,25 @@ class IdentityRepositoryImpl @Inject constructor(
 
     override suspend fun hasIdentity(): Boolean = keyManager.hasIdentity()
 
+    /**
+     * Crash recovery: if staged keys exist, the server accepted a key rotation
+     * but the app crashed before local promotion. Promote the staged keys and
+     * invalidate all session state so peers re-establish.
+     *
+     * This is intentionally separate from [getIdentity] to avoid surprising
+     * side effects (key promotion + session clearing) inside a getter. Call
+     * this once during app initialization or before the first identity access.
+     */
+    suspend fun recoverFromInterruptedKeyRotation() {
+        if (!keyManager.hasStagedKeys()) return
+        keyManager.promoteStagedKeys()
+        keyManager.clearSessionCache()
+        (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
+            ?.clearAllSessions()
+    }
+
     override suspend fun getIdentity(): Identity? {
-        // Crash recovery: if staged keys exist, the server accepted the rotation
-        // but the app crashed before promotion. Promote them now.
-        if (keyManager.hasStagedKeys()) {
-            keyManager.promoteStagedKeys()
-            keyManager.clearSessionCache()
-            (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
-                ?.clearAllSessions()
-        }
+        recoverFromInterruptedKeyRotation()
         val keyPair = keyManager.loadIdentityKeyPair() ?: return null
         val userId = keyManager.getUserId() ?: return null
         val shareCode = keyManager.getShareCode()
@@ -249,12 +259,17 @@ class IdentityRepositoryImpl @Inject constructor(
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {
         val bundle = apiService.fetchKeyBundle(userId) ?: return null
-        return Contact(
-            userId = bundle.userId,
-            displayName = bundle.userId.take(8),
-            publicIdentityKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP),
-            publicSigningKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP),
-        )
+        return try {
+            Contact(
+                userId = bundle.userId,
+                displayName = bundle.userId.take(8),
+                publicIdentityKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP),
+                publicSigningKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP),
+            )
+        } catch (e: IllegalArgumentException) {
+            android.util.Log.e("IdentityRepo", "Malformed Base64 in key bundle for $userId", e)
+            null
+        }
     }
 
     override fun isPqcSession(peerId: String): Boolean = keyManager.isPeerPqcEstablished(peerId)

@@ -281,6 +281,8 @@ class CallManager @Inject constructor(
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
         } else if (pendingIceCandidates.size < MAX_PENDING_ICE_CANDIDATES) {
             pendingIceCandidates.add(candidate)
+        } else {
+            Log.w(TAG, "Dropping ICE candidate: pending queue full ($MAX_PENDING_ICE_CANDIDATES)")
         }
     }
 
