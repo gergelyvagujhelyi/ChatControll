@@ -38,12 +38,16 @@ class ConversationsViewModel @Inject constructor(
             val identity = identityRepository.getIdentity()
             _shareCode.value = identity?.shareCode
         }
-        // Fetch once when the screen opens; ongoing delivery is handled
-        // by WebSocket, FCM push, and the periodic SyncWorker.
+        // Poll for new messages while the conversations screen is open.
+        // WebSocket and FCM provide real-time delivery when available;
+        // this poll covers emulators and unreliable push environments.
         viewModelScope.launch {
-            try {
-                messageRepository.fetchPendingFromServer()
-            } catch (_: Exception) { }
+            while (true) {
+                try {
+                    messageRepository.fetchPendingFromServer()
+                } catch (_: Exception) { }
+                kotlinx.coroutines.delay(10_000)
+            }
         }
     }
 

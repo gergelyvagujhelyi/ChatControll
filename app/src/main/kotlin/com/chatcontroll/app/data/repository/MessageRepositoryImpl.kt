@@ -64,25 +64,15 @@ class MessageRepositoryImpl @Inject constructor(
         val now = System.currentTimeMillis()
         val senderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
 
-        // Serialize ratchet operations per peer to prevent state divergence
-        val peerMutex = peerLocks.getOrPut(recipientId) { kotlinx.coroutines.sync.Mutex() }
-        val envelope = peerMutex.withLock {
-            var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
-            if (sessionKeys == null) {
-                sessionKeys = tryEstablishSession(recipientId)
-                    ?: throw IllegalStateException("No session established with $recipientId")
-            }
-            cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
-        }
-
-        // Store locally as SENDING
+        // Store locally as SENDING before encryption so the message is never
+        // lost even if session establishment or encryption fails.
         val entity = MessageEntity(
             id = messageId,
             conversationId = conversationId,
             senderId = senderId,
             recipientId = recipientId,
-            encryptedBody = envelope.ciphertext,
-            nonce = envelope.nonce,
+            encryptedBody = ByteArray(0),
+            nonce = ByteArray(0),
             plaintext = plaintext,
             state = MessageState.SENDING.name,
             timestamp = now,
@@ -90,6 +80,25 @@ class MessageRepositoryImpl @Inject constructor(
             isOutgoing = true,
         )
         messageDao.insert(entity)
+
+        // Serialize ratchet operations per peer to prevent state divergence
+        val peerMutex = peerLocks.getOrPut(recipientId) { kotlinx.coroutines.sync.Mutex() }
+        val envelope = try {
+            peerMutex.withLock {
+                var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
+                if (sessionKeys == null) {
+                    sessionKeys = tryEstablishSession(recipientId)
+                        ?: throw IllegalStateException("No session established with $recipientId")
+                }
+                cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
+            }
+        } catch (e: Exception) {
+            messageDao.updateState(messageId, MessageState.FAILED.name)
+            throw e
+        }
+
+        // Update the stored message with the encrypted payload
+        messageDao.updateEncryptedBody(messageId, envelope.ciphertext, envelope.nonce)
 
         // Sign the envelope for recipient verification (length-prefixed to prevent ambiguity)
         val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
@@ -646,7 +655,7 @@ class MessageRepositoryImpl @Inject constructor(
                 lastMessageTimestamp = timestamp,
                 unreadCount = if (incrementUnread) currentUnread + 1 else currentUnread,
                 isEncrypted = true,
-                isApproved = existing?.isApproved ?: true,
+                isApproved = existing?.isApproved ?: false,
                 needsSessionReset = existing?.needsSessionReset ?: false,
             )
         )

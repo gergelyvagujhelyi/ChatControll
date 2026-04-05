@@ -81,6 +81,10 @@ class ChatViewModel @Inject constructor(
             _sendError.value = "Session expired. Tap \"Re-establish session\" first."
             return
         }
+        if (conversation.value?.isApproved == false) {
+            _sendError.value = "Accept this message request before replying."
+            return
+        }
 
         _composerText.value = ""
         _sendError.value = null
