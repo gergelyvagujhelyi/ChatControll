@@ -1,5 +1,6 @@
 package com.chatcontroll.app.notification
 
+import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.domain.repository.MessageRepository
 import com.chatcontroll.app.domain.repository.PushTokenRepository
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -18,6 +19,7 @@ class FcmService : FirebaseMessagingService() {
     @Inject lateinit var pushTokenRepository: PushTokenRepository
     @Inject lateinit var messageRepository: MessageRepository
     @Inject lateinit var notificationManager: ChatNotificationManager
+    @Inject lateinit var webSocketClient: WebSocketClient
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -43,6 +45,9 @@ class FcmService : FirebaseMessagingService() {
         // The push notification is a "wake-up" signal only.
         // We never send message content through FCM — the encrypted envelope
         // is fetched directly from the relay server.
+        // Ensure WebSocket is connected so buffered call signals are delivered
+        webSocketClient.ensureConnected()
+
         val senderId = message.data["senderId"] ?: "Unknown"
         val conversationId = message.data["conversationId"]
 

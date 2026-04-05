@@ -27,6 +27,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -72,6 +73,7 @@ class CallManager @Inject constructor(
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
     private val signalMutex = kotlinx.coroutines.sync.Mutex()
+    private var ringingTimeoutJob: Job? = null
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     private var remoteDescriptionSet = false
     /** Track seen signal signatures with timestamps to reject replays.
@@ -97,8 +99,15 @@ class CallManager @Inject constructor(
                 logDebug("Creating SDP offer")
                 val sdp = webRtcEngine!!.createOffer()
                 logDebug("Sending call_offer signal")
-                sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
-                logDebug("call_offer sent successfully")
+                val delivered = sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
+                if (!delivered) {
+                    logWarn("call_offer not delivered — recipient is unavailable")
+                    endCall(CallStatus.UNAVAILABLE)
+                    return@launch
+                }
+                logDebug("call_offer delivered successfully")
+                // Start ringing timeout — if no answer within the limit, give up
+                startRingingTimeout(callId)
             } catch (e: Exception) {
                 logError("Failed to initiate call", e)
                 endCall(CallStatus.FAILED)
@@ -265,6 +274,19 @@ class CallManager @Inject constructor(
 
     private var _pendingOfferPayload: String? = null
 
+    private fun startRingingTimeout(callId: String) {
+        ringingTimeoutJob?.cancel()
+        ringingTimeoutJob = scope.launch {
+            kotlinx.coroutines.delay(RINGING_TIMEOUT_MS)
+            val state = _callState.value
+            if (state != null && state.callId == callId && state.status == CallStatus.RINGING) {
+                logWarn("Ringing timeout — no answer after ${RINGING_TIMEOUT_MS / 1000}s")
+                sendSignal(state.peerId, "call_hangup", callId, "")
+                endCall(CallStatus.UNAVAILABLE)
+            }
+        }
+    }
+
     private suspend fun handleAnswer(signal: CallSignalDto) {
         val state = _callState.value ?: return
         if (signal.callId != state.callId) {
@@ -307,6 +329,8 @@ class CallManager @Inject constructor(
 
     private fun endCall(status: CallStatus) {
         _callState.value = _callState.value?.copy(status = status)
+        ringingTimeoutJob?.cancel()
+        ringingTimeoutJob = null
         val engine = webRtcEngine
         webRtcEngine = null
         _pendingOfferPayload = null
@@ -428,8 +452,14 @@ class CallManager @Inject constructor(
         )
         repeat(SIGNAL_SEND_RETRIES) { attempt ->
             try {
-                apiService.sendCallSignal(request)
-                return true
+                val response = apiService.sendCallSignal(request)
+                if (response.delivered) return true
+                // Server accepted the signal but recipient's WebSocket is disconnected.
+                // Retry with backoff — FCM push may wake the recipient in the meantime.
+                logWarn("Signal $signalType accepted but not delivered (attempt ${attempt + 1}/$SIGNAL_SEND_RETRIES)")
+                if (attempt < SIGNAL_SEND_RETRIES - 1) {
+                    kotlinx.coroutines.delay(UNDELIVERED_RETRY_DELAY_MS * (attempt + 1))
+                }
             } catch (e: Exception) {
                 logError("Failed to send signal $signalType (attempt ${attempt + 1}/$SIGNAL_SEND_RETRIES)", e)
                 if (attempt < SIGNAL_SEND_RETRIES - 1) {
@@ -590,6 +620,10 @@ class CallManager @Inject constructor(
         private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_SEEN_SIGNATURES = 500
         private const val SIGNAL_SEND_RETRIES = 3
+        /** Delay between retries when signal was accepted but not delivered (ms). */
+        private const val UNDELIVERED_RETRY_DELAY_MS = 3_000L
+        /** How long to wait in RINGING before giving up (ms). */
+        private const val RINGING_TIMEOUT_MS = 35_000L
     }
 }
 

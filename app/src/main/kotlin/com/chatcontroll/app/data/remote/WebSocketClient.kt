@@ -83,6 +83,20 @@ class WebSocketClient @Inject constructor(
         }
     }
 
+    /**
+     * Force an immediate reconnect attempt. Useful when an FCM push arrives
+     * while the WebSocket is in an exponential backoff cycle — the server may
+     * have buffered call signals that need delivery now.
+     */
+    fun ensureConnected() {
+        if (connectionJob?.isActive == true) {
+            // Already reconnecting with backoff — restart to connect immediately
+            connectionJob?.cancel()
+        }
+        reconnectDelay = INITIAL_RECONNECT_DELAY
+        connect()
+    }
+
     fun disconnect() {
         connectionJob?.cancel()
         connectionJob = null

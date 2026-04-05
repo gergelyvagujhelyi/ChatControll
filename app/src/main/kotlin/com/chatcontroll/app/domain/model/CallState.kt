@@ -13,6 +13,8 @@ enum class CallStatus {
     NO_RELAY,
     REJECTED,
     BUSY,
+    /** Recipient could not be reached (offline / signal not delivered). */
+    UNAVAILABLE,
 }
 
 data class CallState(
