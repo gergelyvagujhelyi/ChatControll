@@ -443,7 +443,7 @@ class CallManager @Inject constructor(
      * false if accepted-but-not-delivered, null if all attempts failed.
      */
     private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String): Boolean? {
-        val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, payload) else ""
+        val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, callId, payload) else ""
         val senderId = keyManager.getUserId() ?: return null
         val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(peerId.toByteArray(Charsets.UTF_8)) +
@@ -559,9 +559,8 @@ class CallManager @Inject constructor(
      * to avoid advancing the message chain — call signals are ephemeral and
      * may be lost/reordered.
      */
-    private suspend fun encryptPayload(peerId: String, plaintext: String): String {
+    private suspend fun encryptPayload(peerId: String, callId: String, plaintext: String): String {
         val sessionKeys = ensureSessionKeys(peerId)
-        val callId = _callState.value?.callId ?: throw IllegalStateException("No active call")
         val callKey = deriveCallKey(sessionKeys.sendKey, callId)
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
