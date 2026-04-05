@@ -119,3 +119,15 @@
 **Why**: If the app crashes after the server accepts new keys but before the client updates its local storage, the client would be out of sync with the server. Staged keys allow automatic recovery on next launch: detect staged keys, promote them, and invalidate session caches.
 
 **Tradeoff**: Slightly more complex key storage (active + staged slots in KeyManager). Justified by the severity of a split-brain key state.
+
+---
+
+## ADR-12: Session reset via control messages in the message pipeline
+
+**Decision**: After key rotation causes decrypt failures, notify the sender via a control message sent through the existing `/v1/messages/send` endpoint rather than introducing a new WebSocket signal type or REST endpoint.
+
+**Why**: WebSocket signals are ephemeral — if the sender is offline, the signal is lost and they keep sending undecryptable messages. The message pipeline is store-and-forward with FCM fallback, guaranteeing delivery. Control messages are distinguished by a JSON nonce (`{"ctrl":"session_reset"}`) with an empty body. No server changes are required — the server relays the control message like any other opaque envelope.
+
+**Why manual re-establishment**: The sender must tap "Re-establish session" rather than auto-re-keying. This gives the sender explicit visibility that the peer rotated keys, which is important for security awareness (similar to Signal's "safety number changed" notification). Auto-re-keying would silently mask key changes.
+
+**Tradeoff**: The sender sees a blocked conversation until they act. This is the intended UX — security visibility over convenience.
