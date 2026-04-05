@@ -174,7 +174,11 @@ class RatchetSessionManager @Inject constructor(
             EncryptedEnvelope(
                 ciphertext = ciphertext,
                 nonce = headerJson.toByteArray(Charsets.UTF_8),
-                ephemeralPublicKey = Base64.getDecoder().decode(finalHeader.publicKey),
+                ephemeralPublicKey = try {
+                    Base64.getDecoder().decode(finalHeader.publicKey)
+                } catch (e: IllegalArgumentException) {
+                    throw IllegalStateException("Corrupt ephemeral public key in ratchet header", e)
+                },
             )
         }
     }

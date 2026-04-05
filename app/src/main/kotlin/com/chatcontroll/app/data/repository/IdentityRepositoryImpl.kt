@@ -76,8 +76,9 @@ class IdentityRepositoryImpl @Inject constructor(
     override suspend fun getOrCreateIdentity(keyType: KeyType): Identity {
         getIdentity()?.let { return it }
 
-        // Reuse keys from a previous failed attempt, or generate new ones
-        val keyPair = keyManager.loadIdentityKeyPair() ?: run {
+        // If keys exist but userId is missing, a previous bootstrap partially
+        // failed. Regenerate to avoid duplicate/ambiguous server registrations.
+        val keyPair = run {
             val kp = cryptoEngine.generateIdentity()
             keyManager.storeIdentityKeyPair(kp)
             kp
@@ -86,12 +87,13 @@ class IdentityRepositoryImpl @Inject constructor(
         // Generate PQC keys only if the user chose hybrid post-quantum.
         // If the user explicitly chose PQC, key generation MUST succeed —
         // silent fallback to classical would be a cryptographic downgrade.
+        // Always regenerate PQC keys alongside classical keys to keep the
+        // key bundle consistent — reusing orphaned PQC keys with new classical
+        // keys would produce a mismatched bundle.
         val pqcEk = if (keyType == KeyType.HYBRID_POST_QUANTUM) {
-            keyManager.getPqcEncapsulationKey() ?: run {
-                val kemKeyPair = pqcProvider.generateKemKeyPair()
-                keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
-                kemKeyPair.encapsulationKey
-            }
+            val kemKeyPair = pqcProvider.generateKemKeyPair()
+            keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
+            kemKeyPair.encapsulationKey
         } else {
             ByteArray(0)
         }

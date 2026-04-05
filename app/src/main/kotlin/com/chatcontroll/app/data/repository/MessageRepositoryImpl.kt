@@ -44,10 +44,10 @@ class MessageRepositoryImpl @Inject constructor(
     private val headerJson = Json { ignoreUnknownKeys = true }
 
     /** Track consecutive decrypt failures per message to avoid infinite retry. */
-    private val decryptFailCounts = mutableMapOf<String, Int>()
+    private val decryptFailCounts = ConcurrentHashMap<String, Int>()
 
     /** Track peers already notified with session_reset to avoid duplicate signals. */
-    private val sessionResetSentTo = mutableSetOf<String>()
+    private val sessionResetSentTo: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** The conversation currently open on screen — skip unread increment for it. */
     @Volatile

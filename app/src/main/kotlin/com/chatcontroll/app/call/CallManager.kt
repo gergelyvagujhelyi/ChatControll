@@ -134,6 +134,7 @@ class CallManager @Inject constructor(
             // --- Contact resolution + signature verification outside the mutex
             // so network requests don't block ICE candidate / hangup processing.
             val verifiedContact: com.chatcontroll.app.data.local.entity.ContactEntity
+            var needsPersist = false
             try {
                 val localUserId = keyManager.getUserId() ?: return@launch
                 if (signal.signature.isEmpty()) {
@@ -141,7 +142,6 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 var contact = contactDao.getByUserId(signal.senderId)
-                var needsPersist = false
                 if (contact == null) {
                     // Check if we already fetched this contact for a pending call
                     // — avoids redundant network fetches for ICE candidates.
@@ -173,27 +173,24 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 logDebug("Signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
-                // For known contacts, no persistence needed.
-                // For unknown contacts calling us, defer persistence until the
-                // user explicitly accepts the call (see acceptCall).
-                if (needsPersist && _pendingNewContact?.userId != signal.senderId) {
-                    // Always defer persistence — only persist when user
-                    // explicitly accepts the call (see acceptCall).
-                    _pendingNewContact = contact
-                    logDebug("Deferring contact persistence for ${signal.senderId.take(8)} until call accepted")
-                }
                 verifiedContact = contact
             } catch (e: Exception) {
                 logError("Failed to verify signal: ${signal.signalType}", e)
                 return@launch
             }
 
-            // --- Replay check + signal dispatch under the mutex (fast, no I/O)
+            // --- Replay check + lightweight validation under the mutex (no I/O).
+            // All _pendingNewContact reads/writes are inside this lock so the
+            // pattern is safe regardless of dispatcher.
             signalMutex.withLock {
-            try {
+                // Update _pendingNewContact under the lock before dispatch
+                if (needsPersist && _pendingNewContact?.userId != signal.senderId) {
+                    _pendingNewContact = verifiedContact
+                    logDebug("Deferring contact persistence for ${signal.senderId.take(8)} until call accepted")
+                }
+
                 // Reject replayed signals (same signature = same signal)
                 val now = System.currentTimeMillis()
-                // Evict expired entries
                 val iter = seenSignalSignatures.iterator()
                 while (iter.hasNext()) {
                     if (now - iter.next().value > SIGNATURE_TTL_MS) iter.remove() else break
@@ -203,14 +200,42 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 seenSignalSignatures[signal.signature] = now
-                // Cap size as a safety bound
                 while (seenSignalSignatures.size > MAX_SEEN_SIGNATURES) {
                     seenSignalSignatures.remove(seenSignalSignatures.keys.first())
                 }
                 when (signal.signalType) {
-                    "call_offer" -> handleOffer(signal, verifiedContact, isNewContact = _pendingNewContact != null)
-                    "call_answer" -> handleAnswer(signal)
-                    "call_ice_candidate" -> handleIceCandidate(signal)
+                    "call_offer" -> {
+                        if (_callState.value != null) {
+                            // Already in a call — flag for busy signal outside mutex
+                        } else {
+                            val displayName = verifiedContact.displayName
+                            val isNew = _pendingNewContact != null
+                            _callState.value = CallState(
+                                callId = signal.callId,
+                                peerId = signal.senderId,
+                                peerDisplayName = displayName,
+                                direction = CallDirection.INCOMING,
+                                status = CallStatus.RINGING,
+                                isNewContact = isNew,
+                            )
+                            _pendingOfferPayload = signal.encryptedPayload
+                        }
+                    }
+                    "call_answer" -> {
+                        val state = _callState.value
+                        if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
+                            logWarn("Ignoring answer: no matching active call")
+                            return@launch
+                        }
+                        _callState.value = state.copy(status = CallStatus.CONNECTING)
+                    }
+                    "call_ice_candidate" -> {
+                        val state = _callState.value
+                        if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
+                            logDebug("Ignoring ICE candidate: no matching active call")
+                            return@launch
+                        }
+                    }
                     "call_hangup", "call_reject", "call_busy" -> {
                         val state = _callState.value
                         if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
@@ -222,40 +247,33 @@ class CallManager @Inject constructor(
                             "call_reject" -> endCall(CallStatus.REJECTED)
                             "call_busy" -> endCall(CallStatus.BUSY)
                         }
+                        return@launch
                     }
                 }
-            } catch (e: Exception) {
-                logError("Failed to handle signal: ${signal.signalType}", e)
-            }
             } // signalMutex
+
+            // --- Heavy processing outside the mutex (network I/O, decrypt, WebRTC)
+            try {
+                when (signal.signalType) {
+                    "call_offer" -> {
+                        if (_callState.value?.callId == signal.callId) {
+                            // Offer accepted — start callee ringing timeout
+                            startCalleeRingingTimeout(signal.callId)
+                        } else {
+                            // Already in a call — send busy outside the mutex
+                            sendSignal(signal.senderId, "call_busy", signal.callId, "")
+                        }
+                    }
+                    "call_answer" -> processAnswerPayload(signal)
+                    "call_ice_candidate" -> processIceCandidatePayload(signal)
+                }
+            } catch (e: Exception) {
+                logError("Failed to process ${signal.signalType} payload", e)
+                if (signal.signalType == "call_answer") {
+                    endCall(CallStatus.FAILED)
+                }
+            }
         }
-    }
-
-    private suspend fun handleOffer(
-        signal: CallSignalDto,
-        contact: com.chatcontroll.app.data.local.entity.ContactEntity,
-        isNewContact: Boolean = false,
-    ) {
-        if (_callState.value != null) {
-            // Already in a call — send busy
-            sendSignal(signal.senderId, "call_busy", signal.callId, "")
-            return
-        }
-
-        val displayName = contact.displayName
-        _callState.value = CallState(
-            callId = signal.callId,
-            peerId = signal.senderId,
-            peerDisplayName = displayName,
-            direction = CallDirection.INCOMING,
-            status = CallStatus.RINGING,
-            isNewContact = isNewContact,
-        )
-        _pendingOfferPayload = signal.encryptedPayload
-
-        // Callee-side ringing timeout — safety net in case the caller's
-        // hangup signal is lost due to network issues.
-        startCalleeRingingTimeout(signal.callId)
     }
 
     fun acceptCall() {
@@ -272,26 +290,22 @@ class CallManager @Inject constructor(
                 _pendingNewContact = null
             }
 
-            signalMutex.withLock {
             try {
                 val offerPayload = _pendingOfferPayload
                 if (offerPayload == null) {
                     logError("No pending offer payload — cannot accept call", null)
                     endCall(CallStatus.FAILED)
-                    return@withLock
+                    return@launch
                 }
 
                 logDebug("Setting up WebRTC...")
                 setupWebRtc(state.peerId)
                 logDebug("WebRTC setup complete")
 
-                // Decrypt the offer SDP
-                logDebug("Decrypting offer payload (${offerPayload.length} chars)...")
                 val sdpJson = decryptPayload(state.peerId, state.callId, offerPayload)
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
                 logDebug("Decoded offer SDP (${sdpPayload.sdp.length} chars)")
 
-                // Apply pending ICE candidates after setting remote description
                 val answerSdp = webRtcEngine!!.handleRemoteOffer(sdpPayload.sdp)
                 logDebug("Created answer SDP")
 
@@ -309,12 +323,10 @@ class CallManager @Inject constructor(
             } catch (e: Exception) {
                 logError("Failed to accept call: ${e::class.simpleName}: ${e.message}", e)
                 endCall(CallStatus.FAILED)
-                // Notify the caller so they stop ringing
                 try {
                     sendSignal(state.peerId, "call_hangup", state.callId, "")
                 } catch (_: Exception) { }
             }
-            } // signalMutex
         }
     }
 
@@ -382,20 +394,13 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun handleAnswer(signal: CallSignalDto) {
-        val state = _callState.value ?: return
-        if (signal.callId != state.callId) {
-            logWarn("Ignoring answer for unknown callId ${signal.callId.take(8)}")
-            return
-        }
-        _callState.value = state.copy(status = CallStatus.CONNECTING)
-
+    /** Process answer payload — called outside signalMutex after validation. */
+    private suspend fun processAnswerPayload(signal: CallSignalDto) {
         val sdpJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
         webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
 
         remoteDescriptionSet = true
-        // Apply ICE candidates that arrived before the answer
         for (candidate in pendingIceCandidates) {
             webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
         }
@@ -404,12 +409,8 @@ class CallManager @Inject constructor(
         requestAudioFocus()
     }
 
-    private suspend fun handleIceCandidate(signal: CallSignalDto) {
-        val state = _callState.value ?: return
-        if (signal.callId != state.callId) {
-            logWarn("Ignoring ICE candidate for unknown callId ${signal.callId.take(8)}")
-            return
-        }
+    /** Process ICE candidate payload — called outside signalMutex after validation. */
+    private suspend fun processIceCandidatePayload(signal: CallSignalDto) {
         val candidateJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
@@ -480,18 +481,22 @@ class CallManager @Inject constructor(
             }
 
             val isOutgoing = callState.direction == CallDirection.OUTGOING
+            val wasConnected = callState.connectedAt != null
 
             // Determine the call duration (0 if never connected)
-            val durationSeconds = if (callState.connectedAt != null) {
-                ((System.currentTimeMillis() - callState.connectedAt) / 1000).coerceAtLeast(0)
+            val durationSeconds = if (wasConnected) {
+                ((System.currentTimeMillis() - callState.connectedAt!!) / 1000).coerceAtLeast(0)
             } else {
                 0L
             }
 
-            // Map direction + end status to a message state
+            // Map direction + end status to a message state.
+            // Use wasConnected (not durationSeconds) to avoid sub-second
+            // connected calls being classified as missed.
             val messageState = when {
-                isOutgoing -> MessageState.CALL_OUTGOING
-                durationSeconds > 0 -> MessageState.CALL_INCOMING
+                isOutgoing && wasConnected -> MessageState.CALL_OUTGOING
+                isOutgoing -> MessageState.CALL_OUTGOING_MISSED
+                wasConnected -> MessageState.CALL_INCOMING
                 else -> MessageState.CALL_MISSED
             }
 
@@ -519,15 +524,18 @@ class CallManager @Inject constructor(
 
             // Update the conversation preview
             val preview = when (messageState) {
-                MessageState.CALL_OUTGOING -> when {
-                    durationSeconds > 0 -> "Voice call"
-                    endStatus == CallStatus.REJECTED -> "Call declined"
-                    endStatus == CallStatus.BUSY -> "Busy"
-                    endStatus == CallStatus.UNAVAILABLE -> "No answer"
+                MessageState.CALL_OUTGOING -> "Voice call"
+                MessageState.CALL_OUTGOING_MISSED -> when (endStatus) {
+                    CallStatus.REJECTED -> "Call declined"
+                    CallStatus.BUSY -> "Busy"
+                    CallStatus.UNAVAILABLE -> "No answer"
                     else -> "Outgoing call"
                 }
                 MessageState.CALL_INCOMING -> "Voice call"
-                MessageState.CALL_MISSED -> "Missed call"
+                MessageState.CALL_MISSED -> when (endStatus) {
+                    CallStatus.REJECTED -> "Declined call"
+                    else -> "Missed call"
+                }
                 else -> "Call"
             }
             updateConversationPreview(conversationId, peerId, preview, now)
@@ -884,11 +892,11 @@ class CallManager @Inject constructor(
     }
 
     private fun logWarn(msg: String, e: Throwable? = null) {
-        if (BuildConfig.DEBUG) Log.w(TAG, msg, e)
+        Log.w(TAG, msg, e)
     }
 
     private fun logError(msg: String, e: Throwable? = null) {
-        if (BuildConfig.DEBUG) Log.e(TAG, msg, e)
+        Log.e(TAG, msg, e)
     }
 
     companion object {
