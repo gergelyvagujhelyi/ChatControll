@@ -619,7 +619,7 @@ class CallManager @Inject constructor(
         private const val MAX_PENDING_ICE_CANDIDATES = 100
         private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_SEEN_SIGNATURES = 500
-        private const val SIGNAL_SEND_RETRIES = 3
+        private const val SIGNAL_SEND_RETRIES = 5
         /** Delay between retries when signal was accepted but not delivered (ms). */
         private const val UNDELIVERED_RETRY_DELAY_MS = 3_000L
         /** How long to wait in RINGING before giving up (ms). */
