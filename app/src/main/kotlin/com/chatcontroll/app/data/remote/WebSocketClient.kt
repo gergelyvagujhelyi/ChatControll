@@ -27,7 +27,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.util.logging.Logger
+import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,7 +45,11 @@ class WebSocketClient @Inject constructor(
     private val keyManager: KeyManager,
     private val messageRepository: dagger.Lazy<MessageRepository>,
 ) {
-    private val logger = Logger.getLogger("WebSocketClient")
+    private companion object {
+        private const val TAG = "WebSocketClient"
+        private const val INITIAL_RECONNECT_DELAY = 1_000L
+        private const val MAX_RECONNECT_DELAY = 60_000L
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -69,7 +73,7 @@ class WebSocketClient @Inject constructor(
                 try {
                     connectWebSocket()
                 } catch (e: Exception) {
-                    logger.warning("WebSocket connection failed: ${e.message}")
+                    if (BuildConfig.DEBUG) Log.w(TAG, "WebSocket connection failed: ${e.message}")
                 }
 
                 // Exponential backoff reconnect
@@ -110,11 +114,11 @@ class WebSocketClient @Inject constructor(
             val authResponse = (incoming.receive() as? Frame.Text)?.readText()
             val authMsg = json.parseToJsonElement(authResponse ?: "{}").jsonObject
             if (authMsg["type"]?.jsonPrimitive?.content != "auth_ok") {
-                logger.warning("WebSocket auth failed")
+                if (BuildConfig.DEBUG) Log.w(TAG, "WebSocket auth failed")
                 return@webSocket
             }
 
-            logger.info("WebSocket connected and authenticated")
+            if (BuildConfig.DEBUG) Log.d(TAG, "WebSocket connected and authenticated")
             reconnectDelay = INITIAL_RECONNECT_DELAY
 
             // Start ping job
@@ -152,7 +156,7 @@ class WebSocketClient @Inject constructor(
                         try {
                             messageRepository.get().fetchPendingFromServer()
                         } catch (e: Exception) {
-                            logger.warning("Failed to fetch after WS signal: ${e.message}")
+                            if (BuildConfig.DEBUG) Log.w(TAG, "Failed to fetch after WS signal: ${e.message}")
                         }
                     }
                 }
@@ -171,12 +175,8 @@ class WebSocketClient @Inject constructor(
                 }
             }
         } catch (e: Exception) {
-            logger.warning("Failed to parse WebSocket message: ${e.message}")
+            if (BuildConfig.DEBUG) Log.w(TAG, "Failed to parse WebSocket message: ${e.message}")
         }
     }
 
-    companion object {
-        private const val INITIAL_RECONNECT_DELAY = 1_000L
-        private const val MAX_RECONNECT_DELAY = 60_000L
-    }
 }

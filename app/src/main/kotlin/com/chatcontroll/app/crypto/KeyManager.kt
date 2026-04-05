@@ -149,6 +149,16 @@ class KeyManager @Inject constructor(
 
     fun clearSessionCache() {
         sessionCache.clear()
+        // Also remove persisted session keys so getCachedSessionKeys()
+        // doesn't restore stale material after key rotation.
+        val editor = encryptedPrefs.edit()
+        encryptedPrefs.all.keys.filter {
+            it.startsWith(SESSION_PREFIX) ||
+            it.startsWith(SEND_KEY_PREFIX) ||
+            it.startsWith(RECV_KEY_PREFIX) ||
+            it.startsWith(PQC_PREFIX)
+        }.forEach { editor.remove(it) }
+        editor.apply()
     }
 
     /**

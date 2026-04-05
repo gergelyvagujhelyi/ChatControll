@@ -397,7 +397,9 @@ class MessageRepositoryImpl @Inject constructor(
             }
 
             sessionKeys
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo",
+                "Session establishment failed for ${remoteUserId.take(8)}: ${e.message}", e)
             null
         }
     }

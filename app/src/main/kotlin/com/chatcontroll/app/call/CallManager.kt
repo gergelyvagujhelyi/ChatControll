@@ -454,12 +454,15 @@ class CallManager @Inject constructor(
             ByteArray(0)
         }
 
+        // Don't pass PQC key without inbound KEM ciphertext — both sides would
+        // independently encapsulate, producing different shared secrets. Match the
+        // messaging path: PQC only when decapsulating an inbound KEM.
         val sessionKeys = cryptoEngine.establishSession(
             localIdentity = localKeyPair,
             remotePublicBundle = PublicKeyBundle(
                 publicSigningKey = pubSignKey,
                 publicIdentityKey = pubIdKey,
-                pqcEncapsulationKey = pqcKey,
+                pqcEncapsulationKey = ByteArray(0),
             ),
         )
         keyManager.cacheSessionKeys(peerId, sessionKeys)
