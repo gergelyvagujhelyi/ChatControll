@@ -71,24 +71,25 @@ class RatchetSessionManager @Inject constructor(
         val isInitiator = localIdentity.publicIdentityKey.toHex() <
             remotePublicBundle.publicIdentityKey.toHex()
 
-        // PQC KEM handshake: initiator encapsulates, responder decapsulates
+        // PQC KEM handshake: either side can encapsulate or decapsulate.
+        // Priority: inbound KEM ciphertext → decapsulate (the remote already
+        // encapsulated). Otherwise, encapsulate if the remote advertises PQC.
         var pqcSecret = ByteArray(0)
         var kemCiphertext: ByteArray? = null
 
-        if (isInitiator && remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
-            // Initiator: encapsulate against the remote's ML-KEM public key.
+        if (inboundKemCiphertext != null) {
+            // Decapsulate inbound KEM ciphertext using our local ML-KEM key.
+            // The remote party encapsulated — failure must not be swallowed.
+            val decapsulationKey = keyManager.getPqcDecapsulationKey()
+                ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
+            pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
+        } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
+            // Encapsulate against the remote's ML-KEM public key.
             // If the remote advertises PQC, encapsulation MUST succeed —
             // silent fallback to classical would be a cryptographic downgrade.
             val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
             pqcSecret = encapsulation.sharedSecret
             kemCiphertext = encapsulation.ciphertext
-        } else if (!isInitiator && inboundKemCiphertext != null) {
-            // Responder: decapsulate using our local ML-KEM decapsulation key.
-            // Inbound KEM ciphertext means the initiator expects a hybrid session —
-            // failure must not be swallowed.
-            val decapsulationKey = keyManager.getPqcDecapsulationKey()
-                ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
-            pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
         }
 
         // Combine classical + PQC secrets via HKDF
