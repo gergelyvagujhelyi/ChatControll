@@ -1,6 +1,6 @@
 package com.chatcontroll.app.crypto.ratchet
 
-import android.util.Base64
+import java.util.Base64
 import com.chatcontroll.app.crypto.ClassicalKeyAgreement
 import com.chatcontroll.app.crypto.hkdfSha256
 import kotlinx.serialization.encodeToString
@@ -90,7 +90,7 @@ class DoubleRatchet(
         val nextChain = chainKey.next()
 
         val header = RatchetHeader(
-            publicKey = Base64.encodeToString(state.dhKeyPair.publicKey, Base64.NO_WRAP),
+            publicKey = Base64.getEncoder().encodeToString(state.dhKeyPair.publicKey),
             previousChainLength = state.previousSendingChainLength,
             messageNumber = chainKey.index,
         )
@@ -113,7 +113,7 @@ class DoubleRatchet(
      */
     fun decrypt(state: RatchetState, header: RatchetHeader, ciphertext: ByteArray): ByteArray {
         val senderPublicKey = try {
-            Base64.decode(header.publicKey, Base64.NO_WRAP)
+            Base64.getDecoder().decode(header.publicKey)
         } catch (e: IllegalArgumentException) {
             throw SecurityException("Invalid Base64 in ratchet header public key", e)
         }

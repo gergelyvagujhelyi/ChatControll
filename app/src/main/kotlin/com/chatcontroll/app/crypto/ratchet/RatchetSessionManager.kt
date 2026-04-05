@@ -1,7 +1,7 @@
 package com.chatcontroll.app.crypto.ratchet
 
-import android.util.Base64
 import android.util.Log
+import java.util.Base64
 import com.chatcontroll.app.crypto.ClassicalKeyAgreement
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.PqcProvider
@@ -161,7 +161,7 @@ class RatchetSessionManager @Inject constructor(
             val finalHeader = if (state.pendingKemCiphertext != null) {
                 val ct = state.pendingKemCiphertext!!
                 state.pendingKemCiphertext = null
-                header.copy(kemCiphertext = Base64.encodeToString(ct, Base64.NO_WRAP))
+                header.copy(kemCiphertext = Base64.getEncoder().encodeToString(ct))
             } else {
                 header
             }
@@ -173,7 +173,7 @@ class RatchetSessionManager @Inject constructor(
             EncryptedEnvelope(
                 ciphertext = ciphertext,
                 nonce = headerJson.toByteArray(Charsets.UTF_8),
-                ephemeralPublicKey = Base64.decode(finalHeader.publicKey, Base64.NO_WRAP),
+                ephemeralPublicKey = Base64.getDecoder().decode(finalHeader.publicKey),
             )
         }
     }
@@ -232,7 +232,7 @@ class RatchetSessionManager @Inject constructor(
      */
     override fun deriveShareCode(publicIdentityKey: ByteArray): String {
         val hash = MessageDigest.getInstance("SHA-256").digest(publicIdentityKey)
-        return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP)
+        return Base64.getUrlEncoder().encodeToString(hash.copyOfRange(0, 12))
     }
 
     /** Clear all in-memory and persisted ratchet sessions (e.g. after key rotation). */
@@ -324,8 +324,8 @@ private data class SkippedKeyEntry(
     val timestamp: Long = System.currentTimeMillis(),
 )
 
-private fun ByteArray.b64(): String = Base64.encodeToString(this, Base64.NO_WRAP)
-private fun String.fromB64(): ByteArray = Base64.decode(this, Base64.NO_WRAP)
+private fun ByteArray.b64(): String = Base64.getEncoder().encodeToString(this)
+private fun String.fromB64(): ByteArray = Base64.getDecoder().decode(this)
 
 private fun sha256Hex(data: ByteArray): String {
     return MessageDigest.getInstance("SHA-256")
