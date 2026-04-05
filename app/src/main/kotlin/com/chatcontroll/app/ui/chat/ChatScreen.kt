@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.chatcontroll.app.domain.model.MessageState
+import com.chatcontroll.app.ui.components.CallEventItem
 import com.chatcontroll.app.ui.components.MessageBubble
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -147,18 +148,31 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { message ->
                     val time = message.timestamp
                         .toLocalDateTime(TimeZone.currentSystemDefault())
-                    MessageBubble(
-                        text = when {
-                            message.state == MessageState.REJECTED -> "\u26D4 Message rejected (unsigned or unverifiable)"
-                            message.state == MessageState.DECRYPT_FAILED -> "\u26A0 Could not decrypt this message"
-                            message.plaintext.isEmpty() -> "..."
-                            else -> message.plaintext
-                        },
-                        timestamp = "%02d:%02d".format(time.hour, time.minute),
-                        isOutgoing = message.isOutgoing,
-                        state = message.state,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    )
+                    val timeStr = "%02d:%02d".format(time.hour, time.minute)
+
+                    if (message.state.isCallEvent) {
+                        val duration = message.plaintext.toLongOrNull() ?: 0L
+                        CallEventItem(
+                            state = message.state,
+                            durationSeconds = duration,
+                            timestamp = timeStr,
+                            isOutgoing = message.isOutgoing,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    } else {
+                        MessageBubble(
+                            text = when {
+                                message.state == MessageState.REJECTED -> "\u26D4 Message rejected (unsigned or unverifiable)"
+                                message.state == MessageState.DECRYPT_FAILED -> "\u26A0 Could not decrypt this message"
+                                message.plaintext.isEmpty() -> "..."
+                                else -> message.plaintext
+                            },
+                            timestamp = timeStr,
+                            isOutgoing = message.isOutgoing,
+                            state = message.state,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
                 }
             }
 

@@ -13,9 +13,14 @@ import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
 import com.chatcontroll.app.data.remote.dto.CallSignalRequest
+import com.chatcontroll.app.data.local.dao.ConversationDao
+import com.chatcontroll.app.data.local.dao.MessageDao
+import com.chatcontroll.app.data.local.entity.ConversationEntity
+import com.chatcontroll.app.data.local.entity.MessageEntity
 import com.chatcontroll.app.domain.model.CallDirection
 import com.chatcontroll.app.domain.model.CallState
 import com.chatcontroll.app.domain.model.CallStatus
+import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
@@ -53,6 +58,8 @@ class CallManager @Inject constructor(
     private val cryptoEngine: CryptoEngine,
     private val webSocketClient: WebSocketClient,
     private val contactDao: com.chatcontroll.app.data.local.dao.ContactDao,
+    private val messageDao: MessageDao,
+    private val conversationDao: ConversationDao,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -138,11 +145,13 @@ class CallManager @Inject constructor(
                     // for signature verification. Do NOT persist yet — only
                     // save after the signature is verified to prevent an
                     // attacker from polluting the contacts table.
+                    logDebug("Contact not found locally for ${signal.senderId.take(8)}, fetching from server")
                     contact = fetchContactBundle(signal.senderId)
                     if (contact == null) {
-                        logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
+                        logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)} — server lookup failed")
                         return@launch
                     }
+                    logDebug("Fetched key bundle for ${signal.senderId.take(8)}")
                     needsPersist = true
                 }
                 val sigPayload = lengthPrefixed(signal.senderId.toByteArray(Charsets.UTF_8)) +
@@ -153,12 +162,14 @@ class CallManager @Inject constructor(
                 val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
-                    logWarn("Call signal signature verification failed")
+                    logWarn("Call signal signature verification failed for ${signal.senderId.take(8)}")
                     return@launch
                 }
+                logDebug("Signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
                 // Signature verified — now safe to persist the new contact
                 if (needsPersist) {
                     contactDao.upsert(contact)
+                    logDebug("Persisted new contact ${signal.senderId.take(8)}")
                 }
                 verifiedContact = contact
             } catch (e: Exception) {
@@ -355,7 +366,8 @@ class CallManager @Inject constructor(
     }
 
     private fun endCall(status: CallStatus) {
-        _callState.value = _callState.value?.copy(status = status)
+        val endingState = _callState.value
+        _callState.value = endingState?.copy(status = status)
         ringingTimeoutJob?.cancel()
         ringingTimeoutJob = null
         val engine = webRtcEngine
@@ -372,6 +384,13 @@ class CallManager @Inject constructor(
             }
         }
 
+        // Record the call event in conversation history
+        if (endingState != null) {
+            scope.launch {
+                recordCallEvent(endingState, status)
+            }
+        }
+
         // Clear state after a short delay so UI can show the end status
         scope.launch {
             kotlinx.coroutines.delay(2000)
@@ -379,6 +398,112 @@ class CallManager @Inject constructor(
                 _callState.value = null
             }
         }
+    }
+
+    /**
+     * Insert a call event message into the conversation so calls appear
+     * in the chat history alongside text messages.
+     */
+    private suspend fun recordCallEvent(callState: CallState, endStatus: CallStatus) {
+        try {
+            val localUserId = keyManager.getUserId() ?: return
+            val peerId = callState.peerId
+            val isOutgoing = callState.direction == CallDirection.OUTGOING
+
+            // Determine the call duration (0 if never connected)
+            val durationSeconds = if (callState.connectedAt != null) {
+                ((System.currentTimeMillis() - callState.connectedAt) / 1000).coerceAtLeast(0)
+            } else {
+                0L
+            }
+
+            // Map direction + end status to a message state
+            val messageState = when {
+                isOutgoing -> MessageState.CALL_OUTGOING
+                durationSeconds > 0 -> MessageState.CALL_INCOMING
+                else -> MessageState.CALL_MISSED
+            }
+
+            // Find or create conversation for this peer
+            val conversationId = getOrCreateConversationId(peerId)
+
+            val now = System.currentTimeMillis()
+            val messageId = "call-${callState.callId}"
+
+            messageDao.insert(
+                MessageEntity(
+                    id = messageId,
+                    conversationId = conversationId,
+                    senderId = if (isOutgoing) localUserId else peerId,
+                    recipientId = if (isOutgoing) peerId else localUserId,
+                    encryptedBody = ByteArray(0),
+                    nonce = ByteArray(0),
+                    plaintext = durationSeconds.toString(),
+                    state = messageState.name,
+                    timestamp = now,
+                    expiresAt = null,
+                    isOutgoing = isOutgoing,
+                )
+            )
+
+            // Update the conversation preview
+            val preview = when (messageState) {
+                MessageState.CALL_OUTGOING -> if (durationSeconds > 0) "Voice call" else "Outgoing call"
+                MessageState.CALL_INCOMING -> "Voice call"
+                MessageState.CALL_MISSED -> "Missed call"
+                else -> "Call"
+            }
+            updateConversationPreview(conversationId, peerId, preview, now)
+
+            logDebug("Recorded call event: $messageState, duration=${durationSeconds}s")
+        } catch (e: Exception) {
+            logError("Failed to record call event", e)
+        }
+    }
+
+    private suspend fun getOrCreateConversationId(contactId: String): String {
+        val existing = conversationDao.getByContactId(contactId)
+        if (existing != null) return existing.id
+
+        val contact = contactDao.getByUserId(contactId)
+        val displayName = contact?.displayName ?: contactId.take(8)
+
+        val id = UUID.randomUUID().toString()
+        conversationDao.upsert(
+            ConversationEntity(
+                id = id,
+                contactId = contactId,
+                contactDisplayName = displayName,
+                lastMessagePreview = null,
+                lastMessageTimestamp = null,
+                unreadCount = 0,
+                isEncrypted = true,
+                isApproved = true,
+            )
+        )
+        return id
+    }
+
+    private suspend fun updateConversationPreview(
+        conversationId: String,
+        contactId: String,
+        preview: String,
+        timestamp: Long,
+    ) {
+        val existing = conversationDao.getByContactId(contactId)
+        conversationDao.upsert(
+            ConversationEntity(
+                id = conversationId,
+                contactId = contactId,
+                contactDisplayName = existing?.contactDisplayName ?: contactId.take(8),
+                lastMessagePreview = preview,
+                lastMessageTimestamp = timestamp,
+                unreadCount = existing?.unreadCount ?: 0,
+                isEncrypted = true,
+                isApproved = existing?.isApproved ?: true,
+                needsSessionReset = existing?.needsSessionReset ?: false,
+            )
+        )
     }
 
     private suspend fun setupWebRtc(peerId: String) {
