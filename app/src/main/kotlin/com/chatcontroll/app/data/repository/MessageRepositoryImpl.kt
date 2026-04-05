@@ -213,6 +213,7 @@ class MessageRepositoryImpl @Inject constructor(
             val senderContact = contactDao.getByUserId(dto.senderId)
             if (dto.signature.isEmpty() && (senderContact == null || senderContact.signatureRequired)) {
                 if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Rejecting unsigned message from ${dto.senderId.take(8)}")
+                storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
                 receivedIds.add(dto.messageId)
                 continue
             }
@@ -229,6 +230,7 @@ class MessageRepositoryImpl @Inject constructor(
                 if (contact == null) {
                     // Cannot verify — reject the message
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
+                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
                     receivedIds.add(dto.messageId)
                     continue
                 }
@@ -455,6 +457,30 @@ class MessageRepositoryImpl @Inject constructor(
             receivedIds.add(messageId)
             decryptFailCounts.remove(messageId)
         }
+    }
+
+    /** Store a tombstone for a message that was rejected outright (not retriable). */
+    private suspend fun storeRejected(
+        messageId: String,
+        senderId: String,
+        localUserId: String,
+        envelope: EncryptedEnvelope,
+        timestamp: Long,
+    ) {
+        val conversationId = getOrCreateConversationId(senderId)
+        messageDao.insert(MessageEntity(
+            id = messageId,
+            conversationId = conversationId,
+            senderId = senderId,
+            recipientId = localUserId,
+            encryptedBody = envelope.ciphertext,
+            nonce = envelope.nonce,
+            plaintext = "",
+            state = MessageState.REJECTED.name,
+            timestamp = timestamp,
+            expiresAt = null,
+            isOutgoing = false,
+        ))
     }
 
     companion object {
