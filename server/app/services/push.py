@@ -61,11 +61,12 @@ async def _clear_stale_token(recipient_id: str) -> None:
 async def send_push_notification(
     fcm_token: str,
     recipient_id: Optional[str] = None,
+    sender_id: Optional[str] = None,
 ) -> bool:
     """Send a wake-up push to a device.
 
-    The payload contains only a generic signal — never any message content
-    or sender identity. The client fetches the encrypted envelope from the
+    The payload contains only the sender ID for notification routing — never
+    any message content. The client fetches the encrypted envelope from the
     /v1/messages/pending endpoint.
 
     If the FCM token is invalid/expired, it is automatically cleared from
@@ -77,10 +78,12 @@ async def send_push_notification(
     try:
         from firebase_admin import messaging
 
+        data = {"type": "new_message"}
+        if sender_id:
+            data["senderId"] = sender_id
+
         message = messaging.Message(
-            data={
-                "type": "new_message",
-            },
+            data=data,
             token=fcm_token,
             android=messaging.AndroidConfig(
                 priority="high",
