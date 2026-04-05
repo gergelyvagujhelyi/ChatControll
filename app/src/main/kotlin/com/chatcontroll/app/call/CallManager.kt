@@ -99,13 +99,17 @@ class CallManager @Inject constructor(
                 logDebug("Creating SDP offer")
                 val sdp = webRtcEngine!!.createOffer()
                 logDebug("Sending call_offer signal")
-                val delivered = sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
-                if (!delivered) {
-                    logWarn("call_offer not delivered — recipient is unavailable")
-                    endCall(CallStatus.UNAVAILABLE)
+                val result = sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
+                if (result == null) {
+                    logWarn("call_offer failed to send — network error")
+                    endCall(CallStatus.FAILED)
                     return@launch
                 }
-                logDebug("call_offer delivered successfully")
+                if (result) {
+                    logDebug("call_offer delivered via WebSocket")
+                } else {
+                    logDebug("call_offer buffered by server — waiting for FCM to wake recipient")
+                }
                 // Start ringing timeout — if no answer within the limit, give up
                 startRingingTimeout(callId)
             } catch (e: Exception) {
@@ -242,19 +246,19 @@ class CallManager @Inject constructor(
 
     fun rejectCall() {
         val state = _callState.value ?: return
+        endCall(CallStatus.REJECTED)
         scope.launch {
-            val delivered = sendSignal(state.peerId, "call_reject", state.callId, "")
-            if (!delivered) logWarn("Reject signal not delivered — peer may not know call was declined")
-            endCall(CallStatus.REJECTED)
+            val result = sendSignal(state.peerId, "call_reject", state.callId, "")
+            if (result != true) logWarn("Reject signal not delivered — peer may not know call was declined")
         }
     }
 
     fun hangup() {
         val state = _callState.value ?: return
+        endCall(CallStatus.ENDED)
         scope.launch {
-            val delivered = sendSignal(state.peerId, "call_hangup", state.callId, "")
-            if (!delivered) logWarn("Hangup signal not delivered — peer may not know call ended")
-            endCall(CallStatus.ENDED)
+            val result = sendSignal(state.peerId, "call_hangup", state.callId, "")
+            if (result != true) logWarn("Hangup signal not delivered — peer may not know call ended")
         }
     }
 
@@ -430,13 +434,17 @@ class CallManager @Inject constructor(
     }
 
     /**
-     * Send a call signal to the peer. Retries up to [SIGNAL_SEND_RETRIES] times
-     * so that termination signals (hangup/reject) have the best chance of delivery.
-     * Returns true if the signal was delivered, false if all attempts failed.
+     * Send a call signal to the peer. Retries on network errors only — if the
+     * server accepted the signal but the recipient's WebSocket is down, the
+     * server has already buffered the signal and sent an FCM push, so
+     * client-side retries would be redundant.
+     *
+     * Returns true if the signal was delivered immediately via WebSocket,
+     * false if accepted-but-not-delivered, null if all attempts failed.
      */
-    private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String): Boolean {
-        val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, payload) else ""
-        val senderId = keyManager.getUserId() ?: return false
+    private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String): Boolean? {
+        val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, callId, payload) else ""
+        val senderId = keyManager.getUserId() ?: return null
         val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(peerId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(signalType.toByteArray(Charsets.UTF_8)) +
@@ -454,12 +462,10 @@ class CallManager @Inject constructor(
             try {
                 val response = apiService.sendCallSignal(request)
                 if (response.delivered) return true
-                // Server accepted the signal but recipient's WebSocket is disconnected.
-                // Retry with backoff — FCM push may wake the recipient in the meantime.
-                logWarn("Signal $signalType accepted but not delivered (attempt ${attempt + 1}/$SIGNAL_SEND_RETRIES)")
-                if (attempt < SIGNAL_SEND_RETRIES - 1) {
-                    kotlinx.coroutines.delay(UNDELIVERED_RETRY_DELAY_MS * (attempt + 1))
-                }
+                // Server accepted and buffered the signal + sent FCM push.
+                // No need to retry — return false to let the caller decide.
+                logWarn("Signal $signalType accepted but not delivered (server buffered)")
+                return false
             } catch (e: Exception) {
                 logError("Failed to send signal $signalType (attempt ${attempt + 1}/$SIGNAL_SEND_RETRIES)", e)
                 if (attempt < SIGNAL_SEND_RETRIES - 1) {
@@ -467,7 +473,7 @@ class CallManager @Inject constructor(
                 }
             }
         }
-        return false
+        return null
     }
 
     /**
@@ -553,9 +559,8 @@ class CallManager @Inject constructor(
      * to avoid advancing the message chain — call signals are ephemeral and
      * may be lost/reordered.
      */
-    private suspend fun encryptPayload(peerId: String, plaintext: String): String {
+    private suspend fun encryptPayload(peerId: String, callId: String, plaintext: String): String {
         val sessionKeys = ensureSessionKeys(peerId)
-        val callId = _callState.value?.callId ?: throw IllegalStateException("No active call")
         val callKey = deriveCallKey(sessionKeys.sendKey, callId)
         val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -619,9 +624,7 @@ class CallManager @Inject constructor(
         private const val MAX_PENDING_ICE_CANDIDATES = 100
         private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_SEEN_SIGNATURES = 500
-        private const val SIGNAL_SEND_RETRIES = 5
-        /** Delay between retries when signal was accepted but not delivered (ms). */
-        private const val UNDELIVERED_RETRY_DELAY_MS = 3_000L
+        private const val SIGNAL_SEND_RETRIES = 3
         /** How long to wait in RINGING before giving up (ms). */
         private const val RINGING_TIMEOUT_MS = 35_000L
     }

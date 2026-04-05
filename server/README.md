@@ -6,8 +6,9 @@ Privacy-first encrypted message relay built with Python and FastAPI.
 
 - Stores public key bundles for contact discovery via share codes
 - Relays encrypted envelopes between clients
-- Sends FCM wake-up signals for offline delivery
+- Sends FCM wake-up signals for offline delivery (messages and call offers)
 - Provides WebSocket connections for real-time delivery
+- Buffers undelivered call signals for offline recipients (30s TTL)
 - Deletes envelopes after recipient acknowledgement
 - Rate-limits senders to prevent abuse
 
@@ -79,6 +80,20 @@ docker compose up -d --build
 This starts PostgreSQL + the app server + nginx with TLS. Alembic migrations run automatically on container start.
 
 See `.env.example` for all configuration options including `TURN_SECRET`, `METRICS_TOKEN`, and TLS certificate paths.
+
+### Automated Deployment
+
+A cron-based pull deploy script (`deploy.sh`) is included for lightweight servers. It polls for new commits on `develop`, only rebuilds Docker when files in `server/` actually change, and skips otherwise.
+
+**Setup on the server:**
+
+```bash
+crontab -e
+# Add (checks every 5 minutes):
+*/5 * * * * /path/to/ChatControll/server/deploy.sh >> /var/log/chatcontroll-deploy.log 2>&1
+```
+
+Features: file-based locking (no overlapping deploys), Docker layer caching, corrupt/force-pushed commit recovery, and dirty working tree cleanup.
 
 ## Database
 
