@@ -8,6 +8,11 @@ import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
+import org.webrtc.FrameCryptor
+import org.webrtc.FrameCryptorAlgorithm
+import org.webrtc.FrameCryptorFactory
+import org.webrtc.FrameCryptorKeyDerivationAlgorithm
+import org.webrtc.FrameCryptorKeyProvider
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
@@ -30,8 +35,13 @@ class WebRtcEngine(context: Context) {
     private var audioSource: AudioSource? = null
     private var localAudioTrack: AudioTrack? = null
 
+    private var keyProvider: FrameCryptorKeyProvider? = null
+    private var senderFrameCryptor: FrameCryptor? = null
+    private var receiverFrameCryptor: FrameCryptor? = null
+
     var onIceCandidate: ((IceCandidate) -> Unit)? = null
     var onConnectionStateChange: ((PeerConnection.IceConnectionState) -> Unit)? = null
+    var onFrameCryptionStateChange: ((FrameCryptor.FrameCryptionState) -> Unit)? = null
 
     init {
         initOnce(context)
@@ -65,7 +75,9 @@ class WebRtcEngine(context: Context) {
             override fun onRemoveStream(stream: MediaStream?) {}
             override fun onDataChannel(channel: DataChannel?) {}
             override fun onRenegotiationNeeded() {}
-            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {}
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                receiver?.let { setupReceiverFrameCryptor(it) }
+            }
         })
 
         // Add audio track
@@ -141,11 +153,75 @@ class WebRtcEngine(context: Context) {
         peerConnection?.addIceCandidate(IceCandidate(sdpMid, sdpMLineIndex, sdp))
     }
 
+    /**
+     * Enable frame-level E2E encryption on all RTP sender/receiver tracks
+     * using AES-GCM via the WebRTC FrameCryptor API.
+     */
+    fun enableFrameEncryption(key: ByteArray) {
+        val pc = peerConnection ?: return
+
+        val kp = FrameCryptorFactory.createFrameCryptorKeyProvider(
+            /* isShared */ true,
+            /* sharedSecret */ key,
+            /* sharedSecretLength */ key.size,
+            /* salt */ ByteArray(0),
+            /* saltLength */ 0,
+            /* keySize */ key.size,
+            /* forceExpandedAesGcmIvToFullSizeWhenNeeded */ true,
+            FrameCryptorKeyDerivationAlgorithm.HKDF,
+        )
+        keyProvider = kp
+
+        // Encrypt outgoing frames
+        val senders = pc.senders
+        if (senders.isNotEmpty()) {
+            senderFrameCryptor = FrameCryptorFactory.createFrameCryptorForRtpSender(
+                factory, senders[0], PARTICIPANT_LOCAL,
+                FrameCryptorAlgorithm.AES_GCM, kp,
+            ).also {
+                it.setObserver { _, state ->
+                    Log.d(TAG, "Sender frame cryption: $state")
+                    onFrameCryptionStateChange?.invoke(state)
+                }
+                it.setEnabled(true)
+            }
+            Log.d(TAG, "Sender FrameCryptor enabled")
+        }
+
+        // Decrypt incoming frames (receivers may arrive later via onAddTrack)
+        for (receiver in pc.receivers) {
+            setupReceiverFrameCryptor(receiver)
+        }
+    }
+
+    private fun setupReceiverFrameCryptor(receiver: RtpReceiver) {
+        if (receiverFrameCryptor != null) return
+        val kp = keyProvider ?: return
+
+        receiverFrameCryptor = FrameCryptorFactory.createFrameCryptorForRtpReceiver(
+            factory, receiver, PARTICIPANT_REMOTE,
+            FrameCryptorAlgorithm.AES_GCM, kp,
+        ).also {
+            it.setObserver { _, state ->
+                Log.d(TAG, "Receiver frame cryption: $state")
+                onFrameCryptionStateChange?.invoke(state)
+            }
+            it.setEnabled(true)
+        }
+        Log.d(TAG, "Receiver FrameCryptor enabled")
+    }
+
     fun setMicEnabled(enabled: Boolean) {
         localAudioTrack?.setEnabled(enabled)
     }
 
     fun dispose() {
+        senderFrameCryptor?.dispose()
+        receiverFrameCryptor?.dispose()
+        keyProvider?.dispose()
+        senderFrameCryptor = null
+        receiverFrameCryptor = null
+        keyProvider = null
         localAudioTrack?.dispose()
         audioSource?.dispose()
         peerConnection?.dispose()
@@ -158,6 +234,8 @@ class WebRtcEngine(context: Context) {
 
     companion object {
         private const val TAG = "WebRtcEngine"
+        private const val PARTICIPANT_LOCAL = "local"
+        private const val PARTICIPANT_REMOTE = "remote"
         @Volatile private var initialized = false
 
         private fun initOnce(context: Context) {

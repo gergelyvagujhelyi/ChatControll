@@ -330,6 +330,24 @@ class CallManager @Inject constructor(
         webRtcEngine = WebRtcEngine(context)
         webRtcEngine?.createPeerConnection(iceServers)
 
+        // Enable frame-level E2E encryption on media tracks
+        try {
+            val sessionKeys = ensureSessionKeys(peerId)
+            val callId = _callState.value?.callId
+                ?: throw IllegalStateException("No active call")
+            val mediaKey = deriveMediaKey(sessionKeys, callId)
+            webRtcEngine?.enableFrameEncryption(mediaKey)
+            mediaKey.fill(0)
+            logDebug("Frame encryption enabled for call $callId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enable frame encryption", e)
+            throw e // Fail the call — never allow unencrypted media
+        }
+
+        webRtcEngine?.onFrameCryptionStateChange = { state ->
+            logDebug("Frame cryption state: $state")
+        }
+
         webRtcEngine?.onIceCandidate = { candidate ->
             logDebug("Local ICE candidate generated")
             scope.launch {
@@ -390,9 +408,12 @@ class CallManager @Inject constructor(
      * the in-memory cache is empty (e.g. after app restart).
      */
     private suspend fun ensureSessionKeys(peerId: String): SessionKeys {
-        keyManager.getCachedSessionKeys(peerId)?.let { return it }
+        keyManager.getCachedSessionKeys(peerId)?.let { cached ->
+            // Restored sessions after restart may lack actual key material
+            if (cached.sendKey.isNotEmpty() && cached.receiveKey.isNotEmpty()) return cached
+        }
 
-        logDebug("No cached session keys, establishing session")
+        logDebug("No cached session keys (or empty key material), establishing session")
         val bundle = apiService.fetchKeyBundle(peerId)
             ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
         val localKeyPair = keyManager.loadIdentityKeyPair()
@@ -400,13 +421,18 @@ class CallManager @Inject constructor(
 
         val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
         val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+        val pqcKey = if (bundle.pqcEncapsulationKey.isNotEmpty()) {
+            Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
+        } else {
+            ByteArray(0)
+        }
 
         val sessionKeys = cryptoEngine.establishSession(
             localIdentity = localKeyPair,
             remotePublicBundle = PublicKeyBundle(
                 publicSigningKey = pubSignKey,
                 publicIdentityKey = pubIdKey,
-                pqcEncapsulationKey = ByteArray(0),
+                pqcEncapsulationKey = pqcKey,
             ),
         )
         keyManager.cacheSessionKeys(peerId, sessionKeys)
@@ -425,6 +451,27 @@ class CallManager @Inject constructor(
             info = "ChatControll-call-signal".toByteArray(Charsets.UTF_8),
             length = 32,
         )
+    }
+
+    /**
+     * Derive a symmetric media-encryption key that is identical on both peers.
+     * XOR of sendKey and receiveKey is commutative (Alice's sendKey == Bob's
+     * receiveKey), so both sides compute the same value.
+     */
+    private fun deriveMediaKey(sessionKeys: SessionKeys, callId: String): ByteArray {
+        val size = minOf(sessionKeys.sendKey.size, sessionKeys.receiveKey.size)
+        require(size > 0) { "Session keys are empty — cannot derive media key" }
+        val xored = ByteArray(size) { i ->
+            (sessionKeys.sendKey[i].toInt() xor sessionKeys.receiveKey[i].toInt()).toByte()
+        }
+        val key = hkdfSha256(
+            ikm = xored,
+            salt = callId.toByteArray(Charsets.UTF_8),
+            info = "ChatControll-call-media".toByteArray(Charsets.UTF_8),
+            length = 32,
+        )
+        xored.fill(0)
+        return key
     }
 
     /**
