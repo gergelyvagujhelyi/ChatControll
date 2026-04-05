@@ -89,7 +89,7 @@ fun CallScreen(
                 onCallEnded()
             }
         } else when (state.status) {
-            CallStatus.ENDED, CallStatus.FAILED,
+            CallStatus.ENDED, CallStatus.FAILED, CallStatus.NO_RELAY,
             CallStatus.REJECTED, CallStatus.BUSY -> {
                 delay(1500)
                 onCallEnded()
@@ -126,6 +126,17 @@ fun CallScreen(
             if (callState?.status == CallStatus.CONNECTED) {
                 Spacer(modifier = Modifier.height(8.dp))
                 CallDurationTimer(connectedAt = callState?.connectedAt ?: System.currentTimeMillis())
+            }
+
+            // Relay unavailable warning
+            if (callState?.relayUnavailable == true && callState?.status != CallStatus.NO_RELAY) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Relay unavailable \u2014 call may not connect",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
 
@@ -260,6 +271,7 @@ private fun statusText(status: CallStatus?, direction: CallDirection?): String =
     CallStatus.CONNECTED -> "Connected"
     CallStatus.ENDED -> "Call ended"
     CallStatus.FAILED -> "Call failed"
+    CallStatus.NO_RELAY -> "Call failed \u2014 relay unavailable"
     CallStatus.REJECTED -> "Call declined"
     CallStatus.BUSY -> "Busy"
     else -> ""

@@ -341,7 +341,15 @@ class CallManager @Inject constructor(
             listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         }
 
-        logDebug("ICE servers configured: ${iceServers.size}")
+        val hasTurn = iceServers.any { server ->
+            server.urls.any { it.startsWith("turn:") || it.startsWith("turns:") }
+        }
+        if (!hasTurn) {
+            logWarn("No TURN relay available — call may fail behind symmetric NAT")
+            _callState.update { it?.copy(relayUnavailable = true) }
+        }
+
+        logDebug("ICE servers configured: ${iceServers.size} (TURN: $hasTurn)")
         webRtcEngine = WebRtcEngine(context)
         webRtcEngine?.createPeerConnection(iceServers)
 
@@ -384,7 +392,8 @@ class CallManager @Inject constructor(
                     }
                 }
                 PeerConnection.IceConnectionState.FAILED -> {
-                    endCall(CallStatus.FAILED)
+                    val isRelayIssue = _callState.value?.relayUnavailable == true
+                    endCall(if (isRelayIssue) CallStatus.NO_RELAY else CallStatus.FAILED)
                 }
                 PeerConnection.IceConnectionState.DISCONNECTED -> {
                     // May reconnect, don't end immediately
