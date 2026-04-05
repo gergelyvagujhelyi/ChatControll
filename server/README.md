@@ -81,6 +81,20 @@ This starts PostgreSQL + the app server + nginx with TLS. Alembic migrations run
 
 See `.env.example` for all configuration options including `TURN_SECRET`, `METRICS_TOKEN`, and TLS certificate paths.
 
+### Automated Deployment
+
+A cron-based pull deploy script (`deploy.sh`) is included for lightweight servers. It polls for new commits on `develop`, only rebuilds Docker when files in `server/` actually change, and skips otherwise.
+
+**Setup on the server:**
+
+```bash
+crontab -e
+# Add (checks every 5 minutes):
+*/5 * * * * /path/to/ChatControll/server/deploy.sh >> /var/log/chatcontroll-deploy.log 2>&1
+```
+
+Features: file-based locking (no overlapping deploys), Docker layer caching, corrupt/force-pushed commit recovery, and dirty working tree cleanup.
+
 ## Database
 
 Default: SQLite (for development). Switch to PostgreSQL by changing
