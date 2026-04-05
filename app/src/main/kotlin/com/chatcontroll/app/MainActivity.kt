@@ -48,14 +48,18 @@ class MainActivity : ComponentActivity() {
 
         _deepLinkIntent.value = intent
 
-        // Apply screen security by default
+        // Apply screen security synchronously before setContent to avoid
+        // a visible frame before the flag takes effect
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE,
+        )
+
+        // Asynchronously clear the flag if the user has disabled screen security
         lifecycleScope.launch {
             val settings = settingsRepository.getPrivacySettings().firstOrNull() ?: PrivacySettings()
-            if (settings.screenSecurity) {
-                window.setFlags(
-                    WindowManager.LayoutParams.FLAG_SECURE,
-                    WindowManager.LayoutParams.FLAG_SECURE,
-                )
+            if (!settings.screenSecurity) {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
             }
         }
 

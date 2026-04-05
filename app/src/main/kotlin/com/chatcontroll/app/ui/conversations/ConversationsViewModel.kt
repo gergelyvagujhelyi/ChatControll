@@ -26,6 +26,10 @@ class ConversationsViewModel @Inject constructor(
         conversationRepository.getConversations()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val messageRequests: StateFlow<List<Conversation>> =
+        conversationRepository.getMessageRequests()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _shareCode = MutableStateFlow<String?>(null)
     val shareCode: StateFlow<String?> = _shareCode.asStateFlow()
 
@@ -40,6 +44,18 @@ class ConversationsViewModel @Inject constructor(
             try {
                 messageRepository.fetchPendingFromServer()
             } catch (_: Exception) { }
+        }
+    }
+
+    fun acceptMessageRequest(conversationId: String) {
+        viewModelScope.launch {
+            conversationRepository.approveConversation(conversationId)
+        }
+    }
+
+    fun rejectMessageRequest(conversationId: String) {
+        viewModelScope.launch {
+            conversationRepository.deleteConversation(conversationId)
         }
     }
 

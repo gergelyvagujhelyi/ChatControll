@@ -68,12 +68,34 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
+async def _migrate_pending_messages(conn) -> None:
+    """Add columns that may be missing from an older pending_messages table.
+
+    SQLAlchemy's create_all only creates new tables — it never ALTERs
+    existing ones. This lightweight migration adds columns introduced
+    after the initial schema so that existing deployments keep working.
+    """
+    log = logging.getLogger(__name__)
+    migrations = [
+        ("ephemeral_public_key", "ALTER TABLE pending_messages ADD COLUMN ephemeral_public_key TEXT NOT NULL DEFAULT ''"),
+        ("signature", "ALTER TABLE pending_messages ADD COLUMN signature TEXT NOT NULL DEFAULT ''"),
+        ("timestamp_ms", "ALTER TABLE pending_messages ADD COLUMN timestamp_ms BIGINT"),
+    ]
+    for col_name, ddl in migrations:
+        try:
+            await conn.execute(text(ddl))
+            log.info("Migrated pending_messages: added column %s", col_name)
+        except Exception:
+            # Column already exists — expected on fresh or already-migrated DBs
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start services. In debug mode, auto-create tables; in production use Alembic."""
-    if DEBUG:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    """Start services and ensure database tables exist."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await _migrate_pending_messages(conn)
 
     turn_transport = None
     if TURN_ENABLED:
@@ -101,7 +123,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ChatControll Relay",
     description="Privacy-first encrypted message relay server.",
-    version="0.3.2",
+    version="0.3.3",
     lifespan=lifespan,
     # Disable docs in production
     docs_url="/docs" if DEBUG else None,
@@ -117,7 +139,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length:
+        if content_length is not None:
             try:
                 cl = int(content_length)
             except (ValueError, TypeError):
@@ -125,7 +147,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
             if cl < 0 or cl > MAX_REQUEST_BODY_BYTES:
                 return JSONResponse(status_code=413, content={"detail": "Request body too large"})
         # For chunked requests (no Content-Length), check actual body size
-        if not content_length and request.method in ("POST", "PUT", "PATCH"):
+        if content_length is None and request.method in ("POST", "PUT", "PATCH"):
             body = await request.body()
             if len(body) > MAX_REQUEST_BODY_BYTES:
                 return JSONResponse(status_code=413, content={"detail": "Request body too large"})
@@ -163,6 +185,6 @@ async def health_check() -> HealthResponse:
     except Exception:
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "version": "0.3.2", "detail": "Database unreachable"},
+            content={"status": "unhealthy", "version": "0.3.3", "detail": "Database unreachable"},
         )
     return HealthResponse()

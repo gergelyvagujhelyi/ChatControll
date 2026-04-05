@@ -77,7 +77,7 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.3.2"
+    version: str = "0.3.3"
 
 
 class CallSignalRequest(BaseModel):

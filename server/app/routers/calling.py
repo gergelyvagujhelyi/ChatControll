@@ -49,7 +49,8 @@ async def relay_signal(
 
     # Periodically prune users with no recent signals to prevent memory leak
     if len(_signal_times) > 1000:
-        stale = [uid for uid, ts in _signal_times.items() if not ts]
+        stale = [uid for uid, ts in _signal_times.items()
+                 if not ts or (now - ts[-1]) > 300]
         for uid in stale:
             del _signal_times[uid]
     delivered = await ws_manager.relay_call_signal(

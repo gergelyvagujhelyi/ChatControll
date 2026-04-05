@@ -37,12 +37,21 @@ _CLEANUP_INTERVAL = 300  # purge stale entries every 5 min
 
 
 def _client_ip(request: Request) -> str:
-    """Extract client IP, honoring X-Forwarded-For only from trusted proxies."""
+    """Extract client IP, honoring X-Forwarded-For only from trusted proxies.
+
+    Uses the rightmost IP not in TRUSTED_PROXIES, which is the last hop
+    the proxy chain can vouch for. The leftmost IP is client-controlled
+    and trivially spoofable.
+    """
     direct_ip = request.client.host if request.client else "unknown"
     if direct_ip in TRUSTED_PROXIES:
         forwarded = request.headers.get("x-forwarded-for")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            ips = [ip.strip() for ip in forwarded.split(",")]
+            # Walk from right to left; return the first IP not in our trusted set
+            for ip in reversed(ips):
+                if ip not in TRUSTED_PROXIES:
+                    return ip
     return direct_ip
 
 

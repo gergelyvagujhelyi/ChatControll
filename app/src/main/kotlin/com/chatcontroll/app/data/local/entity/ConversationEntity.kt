@@ -12,4 +12,5 @@ data class ConversationEntity(
     val lastMessageTimestamp: Long?,
     val unreadCount: Int,
     val isEncrypted: Boolean,
+    val isApproved: Boolean = true,
 )

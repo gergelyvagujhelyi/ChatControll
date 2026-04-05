@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -58,8 +59,9 @@ class SettingsViewModel @Inject constructor(
     fun updateLockScreenPreview(mode: LockScreenPreviewMode) {
         viewModelScope.launch {
             settingsMutex.withLock {
+                val current = settingsRepository.getPrivacySettings().first()
                 settingsRepository.updatePrivacySettings(
-                    privacySettings.value.copy(lockScreenPreview = mode),
+                    current.copy(lockScreenPreview = mode),
                 )
             }
         }
@@ -68,8 +70,9 @@ class SettingsViewModel @Inject constructor(
     fun updateReadReceipts(enabled: Boolean) {
         viewModelScope.launch {
             settingsMutex.withLock {
+                val current = settingsRepository.getPrivacySettings().first()
                 settingsRepository.updatePrivacySettings(
-                    privacySettings.value.copy(readReceipts = enabled),
+                    current.copy(readReceipts = enabled),
                 )
             }
         }
@@ -78,8 +81,9 @@ class SettingsViewModel @Inject constructor(
     fun updateScreenSecurity(enabled: Boolean) {
         viewModelScope.launch {
             settingsMutex.withLock {
+                val current = settingsRepository.getPrivacySettings().first()
                 settingsRepository.updatePrivacySettings(
-                    privacySettings.value.copy(screenSecurity = enabled),
+                    current.copy(screenSecurity = enabled),
                 )
             }
         }
@@ -88,8 +92,9 @@ class SettingsViewModel @Inject constructor(
     fun updateDisappearingMessages(duration: DisappearingDuration) {
         viewModelScope.launch {
             settingsMutex.withLock {
+                val current = settingsRepository.getPrivacySettings().first()
                 settingsRepository.updatePrivacySettings(
-                    privacySettings.value.copy(disappearingMessagesDefault = duration),
+                    current.copy(disappearingMessagesDefault = duration),
                 )
             }
         }
@@ -131,7 +136,7 @@ class SettingsViewModel @Inject constructor(
                 val identity = identityRepository.getIdentity()
                 _shareCode.value = identity?.shareCode
             } catch (e: Exception) {
-                _rotationError.value = e.message ?: "Key rotation failed"
+                _rotationError.value = "Key rotation failed. Please try again."
             } finally {
                 _isRotatingKeys.value = false
             }

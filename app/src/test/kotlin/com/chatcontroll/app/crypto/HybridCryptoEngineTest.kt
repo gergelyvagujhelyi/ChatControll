@@ -1,5 +1,6 @@
 package com.chatcontroll.app.crypto
 
+import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
@@ -20,12 +21,14 @@ class HybridCryptoEngineTest {
     private lateinit var engine: HybridCryptoEngine
     private lateinit var classicalKa: ClassicalKeyAgreement
     private lateinit var pqcProvider: PqcProvider
+    private lateinit var keyManager: KeyManager
 
     @Before
     fun setup() {
         classicalKa = JvmClassicalKeyAgreement()
         pqcProvider = MockPqcProvider()
-        engine = HybridCryptoEngine(classicalKa, pqcProvider)
+        keyManager = io.mockk.mockk(relaxed = true)
+        engine = HybridCryptoEngine(classicalKa, pqcProvider, keyManager)
     }
 
     @Test

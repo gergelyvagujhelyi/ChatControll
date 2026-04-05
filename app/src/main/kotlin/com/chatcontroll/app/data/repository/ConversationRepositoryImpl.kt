@@ -24,13 +24,25 @@ class ConversationRepositoryImpl @Inject constructor(
         }
     }
 
+    override fun getMessageRequests(): Flow<List<Conversation>> {
+        return conversationDao.getMessageRequests().map { entities ->
+            entities.map { it.toDomain() }
+        }
+    }
+
     override fun getConversation(conversationId: String): Flow<Conversation?> {
         return conversationDao.getById(conversationId).map { it?.toDomain() }
     }
 
     override suspend fun getOrCreateConversation(contactId: String): String {
         val existing = conversationDao.getByContactId(contactId)
-        if (existing != null) return existing.id
+        if (existing != null) {
+            // Auto-approve if user explicitly adds this contact
+            if (!existing.isApproved) {
+                conversationDao.approve(existing.id)
+            }
+            return existing.id
+        }
 
         val id = UUID.randomUUID().toString()
         conversationDao.upsert(
@@ -42,9 +54,14 @@ class ConversationRepositoryImpl @Inject constructor(
                 lastMessageTimestamp = null,
                 unreadCount = 0,
                 isEncrypted = true,
+                isApproved = true,
             )
         )
         return id
+    }
+
+    override suspend fun approveConversation(conversationId: String) {
+        conversationDao.approve(conversationId)
     }
 
     override suspend fun clearUnread(conversationId: String) {
@@ -66,5 +83,6 @@ private fun ConversationEntity.toDomain(): Conversation {
         lastMessageTimestamp = lastMessageTimestamp?.let { Instant.fromEpochMilliseconds(it) },
         unreadCount = unreadCount,
         isEncrypted = isEncrypted,
+        isApproved = isApproved,
     )
 }

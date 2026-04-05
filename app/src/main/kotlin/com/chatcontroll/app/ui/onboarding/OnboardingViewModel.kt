@@ -42,7 +42,7 @@ class OnboardingViewModel @Inject constructor(
                 val identity = createIdentity(selectedKeyType)
                 _state.value = OnboardingState.Complete(identity)
             } catch (e: Exception) {
-                _state.value = OnboardingState.Error(e.message ?: "Failed to create identity")
+                _state.value = OnboardingState.Error("Failed to create identity. Please try again.")
             }
         }
     }
