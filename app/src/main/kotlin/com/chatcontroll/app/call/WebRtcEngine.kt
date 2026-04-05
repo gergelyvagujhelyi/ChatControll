@@ -2,6 +2,7 @@ package com.chatcontroll.app.call
 
 import android.content.Context
 import android.util.Log
+import com.chatcontroll.app.BuildConfig
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.DataChannel
@@ -63,7 +64,7 @@ class WebRtcEngine(context: Context) {
             }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                Log.d(TAG, "ICE connection state: $state")
+                if (BuildConfig.DEBUG) Log.d(TAG, "ICE connection state: $state")
                 onConnectionStateChange?.invoke(state)
             }
 
@@ -180,12 +181,12 @@ class WebRtcEngine(context: Context) {
                 FrameCryptorAlgorithm.AES_GCM, kp,
             ).also {
                 it.setObserver { _, state ->
-                    Log.d(TAG, "Sender frame cryption: $state")
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Sender frame cryption: $state")
                     onFrameCryptionStateChange?.invoke(state)
                 }
                 it.setEnabled(true)
             }
-            Log.d(TAG, "Sender FrameCryptor enabled")
+            if (BuildConfig.DEBUG) Log.d(TAG, "Sender FrameCryptor enabled")
         }
 
         // Decrypt incoming frames (receivers may arrive later via onAddTrack)
@@ -203,12 +204,12 @@ class WebRtcEngine(context: Context) {
             FrameCryptorAlgorithm.AES_GCM, kp,
         ).also {
             it.setObserver { _, state ->
-                Log.d(TAG, "Receiver frame cryption: $state")
+                if (BuildConfig.DEBUG) Log.d(TAG, "Receiver frame cryption: $state")
                 onFrameCryptionStateChange?.invoke(state)
             }
             it.setEnabled(true)
         }
-        Log.d(TAG, "Receiver FrameCryptor enabled")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Receiver FrameCryptor enabled")
     }
 
     fun setMicEnabled(enabled: Boolean) {

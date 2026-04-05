@@ -212,7 +212,7 @@ class MessageRepositoryImpl @Inject constructor(
             // the contact explicitly has signatureRequired=false (legacy contact)
             val senderContact = contactDao.getByUserId(dto.senderId)
             if (dto.signature.isEmpty() && (senderContact == null || senderContact.signatureRequired)) {
-                android.util.Log.w("MessageRepo", "Rejecting unsigned message from ${dto.senderId.take(8)}")
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Rejecting unsigned message from ${dto.senderId.take(8)}")
                 receivedIds.add(dto.messageId)
                 continue
             }
@@ -228,7 +228,7 @@ class MessageRepositoryImpl @Inject constructor(
                 }
                 if (contact == null) {
                     // Cannot verify — reject the message
-                    android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
                     receivedIds.add(dto.messageId)
                     continue
                 }
@@ -238,8 +238,11 @@ class MessageRepositoryImpl @Inject constructor(
                 val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
-                    android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
-                    receivedIds.add(dto.messageId)
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
+                    // Don't ACK immediately — leave in pending queue for retry on
+                    // next sync (key rotation race could cause transient failure).
+                    // ACK after MAX_DECRYPT_RETRIES to prevent queue poisoning.
+                    countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                     continue
                 }
             }
@@ -264,18 +267,18 @@ class MessageRepositoryImpl @Inject constructor(
                             decryptFailCounts.remove(dto.messageId)
                             result
                         } catch (retryEx: Exception) {
-                            android.util.Log.e("MessageRepo",
+                            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo",
                                 "Decrypt failed after PQC re-establish from ${dto.senderId}: ${retryEx.message}", retryEx)
                             countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                             continue
                         }
                     } else {
-                        android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
+                        if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
                         countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                         continue
                     }
                 } else {
-                    android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo", "Decrypt failed from ${dto.senderId}: ${e.message}", e)
                     countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                     continue
                 }
@@ -330,20 +333,20 @@ class MessageRepositoryImpl @Inject constructor(
             val pubIdKey = try {
                 Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
             } catch (e: IllegalArgumentException) {
-                android.util.Log.e("MessageRepo", "Malformed Base64 in identity key for ${remoteUserId.take(8)}", e)
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo", "Malformed Base64 in identity key for ${remoteUserId.take(8)}", e)
                 return null
             }
             val pubSignKey = try {
                 Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
             } catch (e: IllegalArgumentException) {
-                android.util.Log.e("MessageRepo", "Malformed Base64 in signing key for ${remoteUserId.take(8)}", e)
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo", "Malformed Base64 in signing key for ${remoteUserId.take(8)}", e)
                 return null
             }
             val pqcKey = if (bundle.pqcEncapsulationKey.isNotEmpty()) {
                 try {
                     Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
                 } catch (e: IllegalArgumentException) {
-                    android.util.Log.e("MessageRepo", "Malformed Base64 in PQC key for ${remoteUserId.take(8)}", e)
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo", "Malformed Base64 in PQC key for ${remoteUserId.take(8)}", e)
                     return null
                 }
             } else ByteArray(0)
@@ -375,14 +378,14 @@ class MessageRepositoryImpl @Inject constructor(
             } else {
                 // Key continuity check: reject if signing key changed unexpectedly
                 if (!existingContact.publicSigningKey.contentEquals(pubSignKey)) {
-                    android.util.Log.w("MessageRepo",
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
                         "KEY CHANGE detected for ${remoteUserId.take(8)}: " +
                         "signing key differs from stored key, rejecting session")
                     return null
                 }
 
                 if (existingContact.pqcEstablished && !sessionKeys.pqcEstablished) {
-                    android.util.Log.w("MessageRepo",
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
                         "PQC DOWNGRADE REJECTED for ${remoteUserId.take(8)}: " +
                         "contact was hybrid PQ, refusing classical-only session")
                     return null
@@ -434,7 +437,7 @@ class MessageRepositoryImpl @Inject constructor(
         if (failures >= MAX_DECRYPT_RETRIES) {
             // Permanently failed — store as DECRYPT_FAILED so the user
             // sees a tombstone instead of silently losing the message.
-            android.util.Log.w("MessageRepo", "Giving up on message $messageId after $failures attempts")
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Giving up on message $messageId after $failures attempts")
             val conversationId = getOrCreateConversationId(senderId)
             messageDao.insert(MessageEntity(
                 id = messageId,

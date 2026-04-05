@@ -278,7 +278,7 @@ class IdentityRepositoryImpl @Inject constructor(
                 publicSigningKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP),
             )
         } catch (e: IllegalArgumentException) {
-            android.util.Log.e("IdentityRepo", "Malformed Base64 in key bundle for $userId", e)
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("IdentityRepo", "Malformed Base64 in key bundle for $userId", e)
             null
         }
     }

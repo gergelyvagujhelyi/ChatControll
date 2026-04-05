@@ -1,6 +1,7 @@
 package com.chatcontroll.app.crypto.ratchet
 
 import android.util.Log
+import com.chatcontroll.app.BuildConfig
 import java.util.Base64
 import com.chatcontroll.app.crypto.ClassicalKeyAgreement
 import com.chatcontroll.app.crypto.KeyManager
@@ -286,7 +287,7 @@ class RatchetSessionManager @Inject constructor(
                 pqcEstablished = dto.pqcEstablished,
             )
         } catch (e: Exception) {
-            Log.w("RatchetSession", "Failed to load persisted session")
+            if (BuildConfig.DEBUG) Log.w("RatchetSession", "Failed to load persisted session")
             keyManager.removeRatchetState(sessionId)
             null
         }

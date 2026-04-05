@@ -76,9 +76,8 @@ class CallManager @Inject constructor(
     private var remoteDescriptionSet = false
     /** Track seen signal signatures with timestamps to reject replays.
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
-     *  Uses accessOrder=true for LRU eviction so recently verified signatures
-     *  cannot be evicted by a flood of new ones. */
-    private val seenSignalSignatures = LinkedHashMap<String, Long>(64, 0.75f, true)
+     *  Insertion order (accessOrder=false) so time-based eviction is correct. */
+    private val seenSignalSignatures = LinkedHashMap<String, Long>(64, 0.75f, false)
     fun initiateCall(peerId: String, peerDisplayName: String) {
         if (_callState.value != null) return
 
@@ -101,7 +100,7 @@ class CallManager @Inject constructor(
                 sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
                 logDebug("call_offer sent successfully")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to initiate call", e)
+                logError("Failed to initiate call", e)
                 endCall(CallStatus.FAILED)
             }
         }
@@ -115,12 +114,12 @@ class CallManager @Inject constructor(
                 // Verify call signal signature (mandatory)
                 val localUserId = keyManager.getUserId() ?: return@launch
                 if (signal.signature.isEmpty()) {
-                    Log.w(TAG, "Rejecting unsigned call signal from ${signal.senderId.take(8)}")
+                    logWarn("Rejecting unsigned call signal from ${signal.senderId.take(8)}")
                     return@launch
                 }
                 val contact = contactDao.getByUserId(signal.senderId)
                 if (contact == null) {
-                    Log.w(TAG, "Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
+                    logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
                     return@launch
                 }
                 val sigPayload = lengthPrefixed(signal.senderId.toByteArray(Charsets.UTF_8)) +
@@ -131,7 +130,7 @@ class CallManager @Inject constructor(
                 val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
-                    Log.w(TAG, "Call signal signature verification failed")
+                    logWarn("Call signal signature verification failed")
                     return@launch
                 }
                 // Reject replayed signals (same signature = same signal)
@@ -154,12 +153,21 @@ class CallManager @Inject constructor(
                     "call_offer" -> handleOffer(signal)
                     "call_answer" -> handleAnswer(signal)
                     "call_ice_candidate" -> handleIceCandidate(signal)
-                    "call_hangup" -> handleRemoteHangup()
-                    "call_reject" -> endCall(CallStatus.REJECTED)
-                    "call_busy" -> endCall(CallStatus.BUSY)
+                    "call_hangup", "call_reject", "call_busy" -> {
+                        val state = _callState.value
+                        if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
+                            logDebug("Ignoring ${signal.signalType}: no matching active call")
+                            return@launch
+                        }
+                        when (signal.signalType) {
+                            "call_hangup" -> endCall(CallStatus.ENDED)
+                            "call_reject" -> endCall(CallStatus.REJECTED)
+                            "call_busy" -> endCall(CallStatus.BUSY)
+                        }
+                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to handle signal: ${signal.signalType}", e)
+                logError("Failed to handle signal: ${signal.signalType}", e)
             }
             } // signalMutex
         }
@@ -216,7 +224,7 @@ class CallManager @Inject constructor(
 
                 requestAudioFocus()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to accept call", e)
+                logError("Failed to accept call", e)
                 endCall(CallStatus.FAILED)
             }
             } // signalMutex
@@ -258,7 +266,7 @@ class CallManager @Inject constructor(
     private suspend fun handleAnswer(signal: CallSignalDto) {
         val state = _callState.value ?: return
         if (signal.callId != state.callId) {
-            Log.w(TAG, "Ignoring answer for unknown callId ${signal.callId.take(8)}")
+            logWarn("Ignoring answer for unknown callId ${signal.callId.take(8)}")
             return
         }
         _callState.value = state.copy(status = CallStatus.CONNECTING)
@@ -280,7 +288,7 @@ class CallManager @Inject constructor(
     private suspend fun handleIceCandidate(signal: CallSignalDto) {
         val state = _callState.value ?: return
         if (signal.callId != state.callId) {
-            Log.w(TAG, "Ignoring ICE candidate for unknown callId ${signal.callId.take(8)}")
+            logWarn("Ignoring ICE candidate for unknown callId ${signal.callId.take(8)}")
             return
         }
         val candidateJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
@@ -291,12 +299,8 @@ class CallManager @Inject constructor(
         } else if (pendingIceCandidates.size < MAX_PENDING_ICE_CANDIDATES) {
             pendingIceCandidates.add(candidate)
         } else {
-            Log.w(TAG, "Dropping ICE candidate: pending queue full ($MAX_PENDING_ICE_CANDIDATES)")
+            logWarn("Dropping ICE candidate: pending queue full ($MAX_PENDING_ICE_CANDIDATES)")
         }
-    }
-
-    private fun handleRemoteHangup() {
-        endCall(CallStatus.ENDED)
     }
 
     private fun endCall(status: CallStatus) {
@@ -333,7 +337,7 @@ class CallManager @Inject constructor(
                 builder.createIceServer()
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch ICE servers, using defaults", e)
+            logWarn("Failed to fetch ICE servers, using defaults", e)
             listOf(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer())
         }
 
@@ -351,7 +355,7 @@ class CallManager @Inject constructor(
             mediaKey.fill(0)
             logDebug("Frame encryption enabled for call $callId")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to enable frame encryption", e)
+            logError("Failed to enable frame encryption", e)
             throw e // Fail the call — never allow unencrypted media
         }
 
@@ -410,21 +414,24 @@ class CallManager @Inject constructor(
                 )
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send signal $signalType", e)
+            logError("Failed to send signal $signalType", e)
         }
     }
 
     /**
-     * Ensure session keys exist for [peerId], establishing a new session if
-     * the in-memory cache is empty (e.g. after app restart).
+     * Ensure session keys exist for [peerId].
+     *
+     * After app restart, persisted key material is restored from
+     * EncryptedSharedPreferences. A new session is only established
+     * if no prior session exists at all, avoiding overwrite of the
+     * persisted ratchet state (which would desync message crypto).
      */
     private suspend fun ensureSessionKeys(peerId: String): SessionKeys {
         keyManager.getCachedSessionKeys(peerId)?.let { cached ->
-            // Restored sessions after restart may lack actual key material
             if (cached.sendKey.isNotEmpty() && cached.receiveKey.isNotEmpty()) return cached
         }
 
-        logDebug("No cached session keys (or empty key material), establishing session")
+        logDebug("No session keys for $peerId, establishing new session")
         val bundle = apiService.fetchKeyBundle(peerId)
             ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
         val localKeyPair = keyManager.loadIdentityKeyPair()
@@ -542,6 +549,14 @@ class CallManager @Inject constructor(
 
     private fun logDebug(msg: String) {
         if (BuildConfig.DEBUG) Log.d(TAG, msg)
+    }
+
+    private fun logWarn(msg: String, e: Throwable? = null) {
+        if (BuildConfig.DEBUG) Log.w(TAG, msg, e)
+    }
+
+    private fun logError(msg: String, e: Throwable? = null) {
+        if (BuildConfig.DEBUG) Log.e(TAG, msg, e)
     }
 
     companion object {
