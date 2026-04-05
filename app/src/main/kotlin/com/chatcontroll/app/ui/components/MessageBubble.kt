@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -93,6 +94,7 @@ private fun MessageStateIcon(state: MessageState) {
         MessageState.SEEN -> Icons.Default.DoneAll to MaterialTheme.colorScheme.primary
         MessageState.FAILED -> Icons.Default.ErrorOutline to MaterialTheme.colorScheme.error
         MessageState.DECRYPT_FAILED -> Icons.Default.ErrorOutline to MaterialTheme.colorScheme.error
+        MessageState.REJECTED -> Icons.Default.Block to MaterialTheme.colorScheme.error
     }
     Icon(
         imageVector = icon,

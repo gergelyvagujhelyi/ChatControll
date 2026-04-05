@@ -39,7 +39,7 @@
 - If classical crypto is broken by a quantum computer, the PQC component provides protection.
 - The `CryptoEngine` interface allows swapping implementations without redesigning the app.
 
-**Current state**: `BouncyCastlePqcProvider` provides production ML-KEM-768 via Bouncy Castle 1.79+. The hybrid X25519 + ML-KEM key establishment is fully functional. `MockPqcProvider` remains available as a testing fallback.
+**Current state**: `BouncyCastlePqcProvider` provides production ML-KEM-768 via Bouncy Castle 1.79+. The hybrid X25519 + ML-KEM key establishment is fully functional with symmetric negotiation (either party can initiate encapsulation). PQC downgrade from hybrid to classical-only is rejected. `MockPqcProvider` exists for JVM unit tests only.
 
 **Tradeoff**: Larger key bundles and slight handshake overhead. Acceptable for a messaging app where handshakes are infrequent.
 
@@ -99,3 +99,23 @@
 **Why**: Uploading contact books (even hashed) creates a social graph on the server and risks de-anonymization. Share-code-based discovery is more friction but fundamentally more private.
 
 **Tradeoff**: Less convenient onboarding. Users must manually exchange share codes. QR code scanning and invite links reduce this friction.
+
+---
+
+## ADR-10: Ratchet state persistence via EncryptedSharedPreferences
+
+**Decision**: Persist Double Ratchet session state (root key, chain keys, message counters, skipped keys) to EncryptedSharedPreferences rather than the Room database.
+
+**Why**: Ratchet state changes on every message sent or received. Using EncryptedSharedPreferences avoids Room schema migrations for rapidly evolving state and keeps crypto material out of the SQLCipher database, which may be backed up or exported. EncryptedSharedPreferences is backed by Android Keystore, providing hardware-backed encryption at rest.
+
+**Tradeoff**: Not suitable for multi-device sync (SharedPreferences is device-local). Full DB-backed persistence will be needed for multi-device support.
+
+---
+
+## ADR-11: Crash-safe key rotation with staged promotion
+
+**Decision**: Use a two-phase commit for identity key rotation: stage new keys locally before the server call, then promote to active only after server acceptance.
+
+**Why**: If the app crashes after the server accepts new keys but before the client updates its local storage, the client would be out of sync with the server. Staged keys allow automatic recovery on next launch: detect staged keys, promote them, and invalidate session caches.
+
+**Tradeoff**: Slightly more complex key storage (active + staged slots in KeyManager). Justified by the severity of a split-brain key state.

@@ -7,8 +7,10 @@ enum class MessageState {
     FAILED,
     SEEN,
     /** Ciphertext was received but could not be decrypted after all retries. */
-    DECRYPT_FAILED;
+    DECRYPT_FAILED,
+    /** Message was rejected (unsigned when required, or unverifiable sender). */
+    REJECTED;
 
     val isTerminal: Boolean
-        get() = this == DELIVERED || this == SEEN || this == FAILED || this == DECRYPT_FAILED
+        get() = this == DELIVERED || this == SEEN || this == FAILED || this == DECRYPT_FAILED || this == REJECTED
 }

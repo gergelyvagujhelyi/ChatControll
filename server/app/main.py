@@ -28,7 +28,6 @@ from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKE
 from sqlalchemy import text
 
 from app.database import async_session, engine
-from app.models.db import Base
 from app.models.schemas import HealthResponse
 from app.routers import calling, identity, messages, push, websocket
 from app.services.metrics import MetricsMiddleware, metrics_endpoint
@@ -68,34 +67,60 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
-async def _migrate_pending_messages(conn) -> None:
-    """Add columns that may be missing from an older pending_messages table.
+async def _run_alembic_upgrade() -> None:
+    """Run Alembic migrations to bring the database schema up to date.
 
-    SQLAlchemy's create_all only creates new tables — it never ALTERs
-    existing ones. This lightweight migration adds columns introduced
-    after the initial schema so that existing deployments keep working.
+    This is the single source of truth for schema management — both
+    in local development and production (Docker entrypoint also runs
+    ``alembic upgrade head``; running it here is idempotent).
+
+    Runs in a thread because Alembic's ``command.upgrade`` calls
+    ``asyncio.run()`` internally for async engines, which conflicts
+    with the already-running event loop.
     """
-    log = logging.getLogger(__name__)
-    migrations = [
-        ("ephemeral_public_key", "ALTER TABLE pending_messages ADD COLUMN ephemeral_public_key TEXT NOT NULL DEFAULT ''"),
-        ("signature", "ALTER TABLE pending_messages ADD COLUMN signature TEXT NOT NULL DEFAULT ''"),
-        ("timestamp_ms", "ALTER TABLE pending_messages ADD COLUMN timestamp_ms BIGINT"),
-    ]
-    for col_name, ddl in migrations:
+    import asyncio
+    import os
+
+    def _upgrade():
+        from alembic.config import Config
+        from alembic import command
+        from sqlalchemy import inspect, create_engine
+
+        alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
+        alembic_cfg.set_main_option("script_location",
+            os.path.join(os.path.dirname(__file__), "..", "migrations"))
+        from app.config import DATABASE_URL
+        alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+
+        # If tables already exist (e.g. from create_all in tests), stamp head
+        # so Alembic doesn't try to recreate them. Only do this when the
+        # alembic_version table is absent (i.e. Alembic has never run).
+        sync_url = DATABASE_URL.replace("+aiosqlite", "").replace("+asyncpg", "+psycopg2")
+        sync_engine = create_engine(sync_url)
         try:
-            await conn.execute(text(ddl))
-            log.info("Migrated pending_messages: added column %s", col_name)
-        except Exception:
-            # Column already exists — expected on fresh or already-migrated DBs
-            pass
+            inspector = inspect(sync_engine)
+            tables = inspector.get_table_names()
+            has_alembic = "alembic_version" in tables
+            has_app_tables = "identities" in tables
+        finally:
+            sync_engine.dispose()
+
+        if has_app_tables and not has_alembic:
+            log = logging.getLogger(__name__)
+            log.info("Tables exist without alembic_version; stamping head")
+            command.stamp(alembic_cfg, "head")
+            return
+
+        command.upgrade(alembic_cfg, "head")
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _upgrade)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start services and ensure database tables exist."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await _migrate_pending_messages(conn)
+    """Start services and run database migrations."""
+    await _run_alembic_upgrade()
 
     turn_transport = None
     if TURN_ENABLED:

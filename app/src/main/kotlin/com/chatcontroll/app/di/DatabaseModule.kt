@@ -3,6 +3,7 @@ package com.chatcontroll.app.di
 import android.content.Context
 import android.util.Log
 import androidx.room.Room
+import com.chatcontroll.app.BuildConfig
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.chatcontroll.app.crypto.KeyManager
@@ -41,7 +42,7 @@ object DatabaseModule {
                 it.openHelper.writableDatabase
             }
         } catch (e: Exception) {
-            Log.w("DatabaseModule", "Database unreadable, deleting and recreating", e)
+            if (BuildConfig.DEBUG) Log.w("DatabaseModule", "Database unreadable, deleting and recreating", e)
             context.deleteDatabase(DB_NAME)
             databaseWasReset = true
             buildDatabase(context, factory)

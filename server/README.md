@@ -53,6 +53,8 @@ pytest -v
 | POST | `/v1/identity/bootstrap` | Register a guest identity |
 | GET | `/v1/identity/{user_id}/keys` | Fetch public key bundle |
 | GET | `/v1/identity/resolve/{share_code}` | Resolve share code to keys |
+| PUT | `/v1/identity/me/keys` | Rotate identity keys (proof-of-possession required) |
+| DELETE | `/v1/identity/me` | Delete identity and all associated data |
 | POST | `/v1/messages/send` | Submit encrypted envelope |
 | GET | `/v1/messages/pending` | Fetch pending envelopes |
 | POST | `/v1/messages/ack` | Acknowledge receipt |

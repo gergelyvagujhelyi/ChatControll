@@ -101,7 +101,7 @@ app/src/main/kotlin/com/chatcontroll/app/
 │   ├── AndroidClassicalKeyAgreement.kt  # JCA implementation
 │   ├── PqcProvider.kt              # ML-KEM interface
 │   ├── BouncyCastlePqcProvider.kt  # Production ML-KEM-768 (BC 1.79+)
-│   ├── MockPqcProvider.kt          # Fallback mock for testing
+│   ├── MockPqcProvider.kt          # Test-only mock (not used in production)
 │   ├── HybridCryptoEngine.kt       # Combines classical + PQC (static sessions)
 │   ├── KeyManager.kt               # Keystore-backed key storage
 │   └── ratchet/                # Double Ratchet protocol
@@ -120,12 +120,16 @@ app/src/main/kotlin/com/chatcontroll/app/
 │   ├── repository/             # Repository + CryptoEngine interfaces
 │   └── usecase/                # Business logic
 ├── notification/               # FCM service, notification manager
+├── call/                       # Call infrastructure
+│   ├── CallManager.kt             # Call state machine + signaling
+│   └── WebRtcEngine.kt            # WebRTC peer connection + FrameCryptor
 ├── ui/
 │   ├── theme/                  # Material 3 theme
 │   ├── components/             # Reusable Compose components
 │   ├── onboarding/             # Guest identity creation flow
 │   ├── conversations/          # Conversation list
 │   ├── chat/                   # Chat thread + composer
+│   ├── call/                   # Call screen + ViewModel
 │   ├── contacts/               # Add contact via share code
 │   ├── settings/               # Privacy & security settings
 │   └── navigation/             # Nav graph
@@ -144,7 +148,7 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 1. **Production ML-KEM-768** — `BouncyCastlePqcProvider` uses Bouncy Castle 1.79+ for real NIST FIPS 203 post-quantum key encapsulation. The hybrid X25519 + ML-KEM key establishment is fully functional.
 
-2. **Double Ratchet protocol** — `RatchetSessionManager` implements Signal-style per-message forward secrecy with DH ratchet steps and symmetric chain ratchets. Compromising current state does not reveal past messages.
+2. **Double Ratchet protocol** — `RatchetSessionManager` implements Signal-style per-message forward secrecy with DH ratchet steps and symmetric chain ratchets. Session state is persisted to EncryptedSharedPreferences and survives app restarts. Compromising current state does not reveal past messages.
 
 3. **Python relay server** — Full FastAPI backend in `server/` with SQLite/PostgreSQL support, WebSocket real-time delivery, FCM push forwarding, rate limiting, and comprehensive test suite. `KtorApiService` + `WebSocketClient` connect the Android app to it.
 
@@ -154,13 +158,17 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 6. **Security hardening (v0.3.0–0.3.1)** — Protected metrics endpoint, generic auth errors, WebSocket call signal validation and rate limiting, debug logging gated behind `BuildConfig.DEBUG`, certificate pinning configuration, call signal Ed25519 signatures, per-challenge TURN nonce rotation (RFC 5389), ICE candidate bounds checking.
 
+7. **Key rotation (v0.3.3)** — `rotateIdentityKeys()` regenerates Ed25519 + X25519 + ML-KEM-768 keys with crash-safe staged promotion. Server validates proof-of-possession before accepting new keys.
+
+8. **PQC negotiation & downgrade protection (v0.3.4)** — Either party can initiate ML-KEM-768 encapsulation (symmetric negotiation). PQC downgrade from hybrid to classical-only is rejected. Base64 input validation on all externally-received key material. Call signal reliability fix ensures reject/hangup reaches the peer.
+
 ## Next Priorities
 
-1. **Ratchet state persistence** — Serialize Double Ratchet session state to the encrypted database so sessions survive app restarts without re-keying.
+1. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.
 
-2. **Multi-device support** �� Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.
+2. **Automated key rotation schedule** — Periodic identity key rotation with contact notification and old-key grace period for in-flight messages.
 
-3. **Key rotation protocol** — Periodic identity key rotation for compromise recovery and device migration.
+3. **Push proxy** — Break FCM token linkability by routing wake-up signals through a proxy service.
 
 ## License
 

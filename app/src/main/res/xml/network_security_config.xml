@@ -10,7 +10,7 @@
     -->
     <domain-config>
         <domain includeSubdomains="true">api.chatcontroll.vagujhelyigergely.com</domain>
-        <pin-set expiration="2027-10-01">
+        <pin-set expiration="2028-10-01">
             <!-- Leaf certificate -->
             <pin digest="SHA-256">IGKTWvLwJLnLEgt8NhoSwhbuCUZ5vqeWkRa9WfGfO6A=</pin>
             <!-- Intermediate CA (backup) -->

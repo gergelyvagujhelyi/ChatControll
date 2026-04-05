@@ -9,9 +9,13 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.chatcontroll.app.data.remote.WebSocketClient
+import com.chatcontroll.app.data.repository.IdentityRepositoryImpl
 import com.chatcontroll.app.worker.SyncWorker
 import dagger.hilt.android.HiltAndroidApp
-import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
 import java.util.concurrent.TimeUnit
@@ -20,8 +24,23 @@ import javax.inject.Inject
 @HiltAndroidApp
 class ChatControllApp : Application(), Configuration.Provider {
 
+    companion object {
+        init {
+            // Must load before Hilt injects the database (DI triggers before onCreate)
+            System.loadLibrary("sqlcipher")
+
+            // Android ships a stripped-down BC provider that lacks Ed25519/X25519/Kyber.
+            // Replace it with the full Bouncy Castle 1.79 provider.
+            Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
+            Security.insertProviderAt(BouncyCastleProvider(), 1)
+        }
+    }
+
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var webSocketClient: WebSocketClient
+    @Inject lateinit var identityRepository: IdentityRepositoryImpl
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
@@ -31,13 +50,8 @@ class ChatControllApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
-        // Android ships a stripped-down BC provider that lacks Ed25519/X25519/Kyber.
-        // Replace it with the full Bouncy Castle 1.79 provider.
-        Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
-        Security.insertProviderAt(BouncyCastleProvider(), 1)
-
-        // Initialize SQLCipher native library
-        System.loadLibrary("sqlcipher")
+        // Recover from interrupted key rotation before any identity access
+        appScope.launch { identityRepository.recoverFromInterruptedKeyRotation() }
 
         scheduleSyncWorker()
 

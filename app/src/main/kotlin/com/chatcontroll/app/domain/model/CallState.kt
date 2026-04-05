@@ -9,6 +9,8 @@ enum class CallStatus {
     CONNECTED,
     ENDED,
     FAILED,
+    /** ICE connection failed because no TURN relay was available. */
+    NO_RELAY,
     REJECTED,
     BUSY,
 }
@@ -23,4 +25,6 @@ data class CallState(
     val connectedAt: Long? = null,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
+    /** True when no TURN relay server is available (STUN-only fallback). */
+    val relayUnavailable: Boolean = false,
 )

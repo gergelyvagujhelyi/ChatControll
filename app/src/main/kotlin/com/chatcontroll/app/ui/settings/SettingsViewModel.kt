@@ -136,6 +136,9 @@ class SettingsViewModel @Inject constructor(
                 val identity = identityRepository.getIdentity()
                 _shareCode.value = identity?.shareCode
             } catch (e: Exception) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) {
+                    android.util.Log.e("SettingsVM", "Key rotation failed", e)
+                }
                 _rotationError.value = "Key rotation failed. Please try again."
             } finally {
                 _isRotatingKeys.value = false
