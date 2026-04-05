@@ -90,7 +90,7 @@ A cron-based pull deploy script (`deploy.sh`) is included for lightweight server
 ```bash
 crontab -e
 # Add (checks every 5 minutes):
-*/5 * * * * /path/to/ChatControll/server/deploy.sh >> /var/log/chatcontroll-deploy.log 2>&1
+*/5 * * * * /path/to/ChatControll/server/deploy.sh >> ~/deploy.log 2>&1
 ```
 
 Features: file-based locking (no overlapping deploys), Docker layer caching, corrupt/force-pushed commit recovery, and dirty working tree cleanup.

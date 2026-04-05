@@ -122,18 +122,28 @@ class CallManager @Inject constructor(
     fun handleIncomingSignal(signal: CallSignalDto) {
         logDebug("Incoming signal: ${signal.signalType}")
         scope.launch {
-            signalMutex.withLock {
+            // --- Contact resolution + signature verification outside the mutex
+            // so network requests don't block ICE candidate / hangup processing.
+            val verifiedContact: com.chatcontroll.app.data.local.entity.ContactEntity
             try {
-                // Verify call signal signature (mandatory)
                 val localUserId = keyManager.getUserId() ?: return@launch
                 if (signal.signature.isEmpty()) {
                     logWarn("Rejecting unsigned call signal from ${signal.senderId.take(8)}")
                     return@launch
                 }
-                val contact = contactDao.getByUserId(signal.senderId)
+                var contact = contactDao.getByUserId(signal.senderId)
+                var needsPersist = false
                 if (contact == null) {
-                    logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
-                    return@launch
+                    // Unknown sender — fetch their key bundle from the server
+                    // for signature verification. Do NOT persist yet — only
+                    // save after the signature is verified to prevent an
+                    // attacker from polluting the contacts table.
+                    contact = fetchContactBundle(signal.senderId)
+                    if (contact == null) {
+                        logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)}")
+                        return@launch
+                    }
+                    needsPersist = true
                 }
                 val sigPayload = lengthPrefixed(signal.senderId.toByteArray(Charsets.UTF_8)) +
                     lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
@@ -146,6 +156,19 @@ class CallManager @Inject constructor(
                     logWarn("Call signal signature verification failed")
                     return@launch
                 }
+                // Signature verified — now safe to persist the new contact
+                if (needsPersist) {
+                    contactDao.upsert(contact)
+                }
+                verifiedContact = contact
+            } catch (e: Exception) {
+                logError("Failed to verify signal: ${signal.signalType}", e)
+                return@launch
+            }
+
+            // --- Replay check + signal dispatch under the mutex (fast, no I/O)
+            signalMutex.withLock {
+            try {
                 // Reject replayed signals (same signature = same signal)
                 val now = System.currentTimeMillis()
                 // Evict expired entries
@@ -163,7 +186,7 @@ class CallManager @Inject constructor(
                     seenSignalSignatures.remove(seenSignalSignatures.keys.first())
                 }
                 when (signal.signalType) {
-                    "call_offer" -> handleOffer(signal)
+                    "call_offer" -> handleOffer(signal, verifiedContact)
                     "call_answer" -> handleAnswer(signal)
                     "call_ice_candidate" -> handleIceCandidate(signal)
                     "call_hangup", "call_reject", "call_busy" -> {
@@ -186,14 +209,14 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun handleOffer(signal: CallSignalDto) {
+    private suspend fun handleOffer(signal: CallSignalDto, contact: com.chatcontroll.app.data.local.entity.ContactEntity) {
         if (_callState.value != null) {
             // Already in a call — send busy
             sendSignal(signal.senderId, "call_busy", signal.callId, "")
             return
         }
 
-        val displayName = signal.senderId.take(8)
+        val displayName = contact.displayName
         _callState.value = CallState(
             callId = signal.callId,
             peerId = signal.senderId,
@@ -474,6 +497,28 @@ class CallManager @Inject constructor(
             }
         }
         return null
+    }
+
+    /**
+     * Fetch a user's key bundle from the server WITHOUT persisting it.
+     * Returns an in-memory ContactEntity for signature verification.
+     * Only persist via [contactDao.upsert] after the signature is verified.
+     */
+    private suspend fun fetchContactBundle(userId: String): com.chatcontroll.app.data.local.entity.ContactEntity? {
+        return try {
+            val bundle = apiService.fetchKeyBundle(userId) ?: return null
+            val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+            val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+            com.chatcontroll.app.data.local.entity.ContactEntity(
+                userId = userId,
+                displayName = userId.take(8),
+                publicIdentityKey = pubIdKey,
+                publicSigningKey = pubSignKey,
+            )
+        } catch (e: Exception) {
+            logError("Failed to fetch key bundle for ${userId.take(8)}", e)
+            null
+        }
     }
 
     /**
