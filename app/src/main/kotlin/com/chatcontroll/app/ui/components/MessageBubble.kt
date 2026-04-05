@@ -92,6 +92,7 @@ private fun MessageStateIcon(state: MessageState) {
         MessageState.DELIVERED -> Icons.Default.DoneAll to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
         MessageState.SEEN -> Icons.Default.DoneAll to MaterialTheme.colorScheme.primary
         MessageState.FAILED -> Icons.Default.ErrorOutline to MaterialTheme.colorScheme.error
+        MessageState.DECRYPT_FAILED -> Icons.Default.ErrorOutline to MaterialTheme.colorScheme.error
     }
     Icon(
         imageVector = icon,

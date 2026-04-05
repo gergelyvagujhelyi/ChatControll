@@ -1,6 +1,6 @@
 package com.chatcontroll.app.crypto
 
-import android.util.Base64
+import java.util.Base64
 import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.EncryptedEnvelope
 import com.chatcontroll.app.domain.repository.KeyPair
@@ -140,7 +140,7 @@ class HybridCryptoEngine @Inject constructor(
 
     override fun deriveShareCode(publicIdentityKey: ByteArray): String {
         val hash = MessageDigest.getInstance("SHA-256").digest(publicIdentityKey)
-        return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP)
+        return Base64.getUrlEncoder().encodeToString(hash.copyOfRange(0, 12))
     }
 
     companion object {

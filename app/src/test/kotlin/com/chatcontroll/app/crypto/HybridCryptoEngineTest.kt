@@ -65,11 +65,8 @@ class HybridCryptoEngineTest {
             ),
         )
 
-        // Since X25519 DH is symmetric (alice_priv * bob_pub == bob_priv * alice_pub),
-        // the session keys are derived from the same shared secret but with different
-        // send/receive ordering based on who initiated. For this test, we use alice's
-        // send key as the decryption key.
-        val decrypted = engine.decrypt(aliceSession, envelope)
+        // Bob's receiveKey matches Alice's sendKey, so Bob can decrypt Alice's message.
+        val decrypted = engine.decrypt(bobSession, envelope)
         assertArrayEquals(plaintext, decrypted)
     }
 
