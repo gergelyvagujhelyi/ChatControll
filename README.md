@@ -152,7 +152,7 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 3. **Python relay server** — Full FastAPI backend in `server/` with SQLite/PostgreSQL support, WebSocket real-time delivery, FCM push forwarding, rate limiting, and comprehensive test suite. `KtorApiService` + `WebSocketClient` connect the Android app to it.
 
-4. **Encrypted voice calls** — WebRTC-based 1:1 voice calls with end-to-end encrypted signaling. Ephemeral HMAC-based TURN credentials (coturn-compatible) are generated per session.
+4. **Encrypted voice calls** — WebRTC-based 1:1 voice calls with end-to-end encrypted signaling. Ephemeral HMAC-based TURN credentials (coturn-compatible) are generated per session. Call signals are relayed via WebSocket with FCM push fallback and server-side buffering for offline recipients (v0.3.7).
 
 5. **Ed25519 authentication** — All API requests are authenticated with Ed25519 signed tokens. Message envelopes are signed by the sender and verified by the recipient.
 
@@ -163,6 +163,8 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 8. **PQC negotiation & downgrade protection (v0.3.4)** — Either party can initiate ML-KEM-768 encapsulation (symmetric negotiation). PQC downgrade from hybrid to classical-only is rejected. Base64 input validation on all externally-received key material. Call signal reliability fix ensures reject/hangup reaches the peer.
 
 9. **Session reset on key rotation (v0.3.5)** — When a peer rotates their identity keys, the recipient detects decryption failure and sends a `session_reset` control message through the existing message pipeline (guaranteed delivery). The sender's UI blocks further messages until they manually re-establish the session with the peer's new keys. Contact key material is updated automatically from the server.
+
+10. **Call signaling reliability (v0.3.7)** — Call signals now fall back to FCM push when the recipient's WebSocket is disconnected. The server buffers undelivered signals (30s TTL) and flushes them when the recipient reconnects. The caller sees "Contact unavailable" after a 35s ringing timeout instead of ringing indefinitely. Hangup/reject UI responds instantly (signal sent fire-and-forget in background).
 
 ## Next Priorities
 

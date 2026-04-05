@@ -6,8 +6,9 @@ Privacy-first encrypted message relay built with Python and FastAPI.
 
 - Stores public key bundles for contact discovery via share codes
 - Relays encrypted envelopes between clients
-- Sends FCM wake-up signals for offline delivery
+- Sends FCM wake-up signals for offline delivery (messages and call offers)
 - Provides WebSocket connections for real-time delivery
+- Buffers undelivered call signals for offline recipients (30s TTL)
 - Deletes envelopes after recipient acknowledgement
 - Rate-limits senders to prevent abuse
 

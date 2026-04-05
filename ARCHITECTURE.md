@@ -66,6 +66,8 @@
 
 **Tradeoff**: Slightly higher latency (FCM wake-up + fetch) vs. including the payload in the push. Worth the privacy improvement.
 
+**Extension (v0.3.7)**: The same wake-up-only pattern now applies to call signaling. When a call offer cannot be delivered via WebSocket (recipient offline), the server sends an FCM wake-up push and buffers the signal. The recipient's app reconnects WebSocket on push receipt and receives the buffered signal. Call signal content never passes through FCM.
+
 ---
 
 ## ADR-7: Mock API service layer
