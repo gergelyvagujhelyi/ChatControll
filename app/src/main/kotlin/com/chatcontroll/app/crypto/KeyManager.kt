@@ -104,9 +104,12 @@ class KeyManager @Inject constructor(
 
     fun cacheSessionKeys(peerId: String, sessionKeys: SessionKeys) {
         sessionCache[peerId] = sessionKeys
-        if (sessionKeys.pqcEstablished) {
-            encryptedPrefs.edit().putBoolean(PQC_PREFIX + peerId, true).apply()
-        }
+        // Persist the session mapping so it survives app restarts.
+        // The actual ratchet state is persisted separately via saveRatchetState().
+        encryptedPrefs.edit()
+            .putString(SESSION_PREFIX + peerId, sessionKeys.sessionId)
+            .putBoolean(PQC_PREFIX + peerId, sessionKeys.pqcEstablished)
+            .apply()
     }
 
     fun isPeerPqcEstablished(peerId: String): Boolean {
@@ -115,7 +118,18 @@ class KeyManager @Inject constructor(
     }
 
     fun getCachedSessionKeys(peerId: String): SessionKeys? {
-        return sessionCache[peerId]
+        sessionCache[peerId]?.let { return it }
+        // Restore from persistent storage after app restart
+        val sessionId = encryptedPrefs.getString(SESSION_PREFIX + peerId, null) ?: return null
+        val pqc = encryptedPrefs.getBoolean(PQC_PREFIX + peerId, false)
+        val restored = SessionKeys(
+            sendKey = ByteArray(0), // Not used — ratchet derives per-message keys
+            receiveKey = ByteArray(0),
+            sessionId = sessionId,
+            pqcEstablished = pqc,
+        )
+        sessionCache[peerId] = restored
+        return restored
     }
 
     fun clearSessionCache() {
@@ -262,6 +276,7 @@ class KeyManager @Inject constructor(
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
         private const val KEY_CREATED_AT = "created_at"
         private const val PQC_PREFIX = "pqc_session_"
+        private const val SESSION_PREFIX = "session_id_"
         private const val RATCHET_PREFIX = "ratchet_"
         private const val PENDING_PUBLIC_SIGNING = "pending_pub_sign"
         private const val PENDING_PRIVATE_SIGNING = "pending_priv_sign"

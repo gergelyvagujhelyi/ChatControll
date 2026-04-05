@@ -367,16 +367,22 @@ class MessageRepositoryImpl @Inject constructor(
     private suspend fun getOrCreateConversationId(contactId: String): String {
         val existing = conversationDao.getByContactId(contactId)
         if (existing != null) return existing.id
+
+        // New inbound conversation from someone we haven't added — message request
+        val contact = contactDao.getByUserId(contactId)
+        val displayName = contact?.displayName ?: contactId.take(8)
+
         val id = UUID.randomUUID().toString()
         conversationDao.upsert(
             com.chatcontroll.app.data.local.entity.ConversationEntity(
                 id = id,
                 contactId = contactId,
-                contactDisplayName = contactId.take(8),
+                contactDisplayName = displayName,
                 lastMessagePreview = null,
                 lastMessageTimestamp = null,
                 unreadCount = 0,
                 isEncrypted = true,
+                isApproved = false,
             )
         )
         return id

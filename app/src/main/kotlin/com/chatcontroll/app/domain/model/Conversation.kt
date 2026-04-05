@@ -10,4 +10,5 @@ data class Conversation(
     val lastMessageTimestamp: Instant?,
     val unreadCount: Int,
     val isEncrypted: Boolean,
+    val isApproved: Boolean = true,
 )

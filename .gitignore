@@ -11,6 +11,7 @@ local.properties
 
 # Server
 server/.venv/
+chatcontroll.db
 server/chatcontroll.db
 server/.env
 !server/.env.example

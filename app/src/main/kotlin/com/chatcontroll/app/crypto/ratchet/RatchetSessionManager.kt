@@ -184,9 +184,12 @@ class RatchetSessionManager @Inject constructor(
 
             val headerJson = String(envelope.nonce, Charsets.UTF_8)
             val header = json.decodeFromString<RatchetHeader>(headerJson)
+            // Strip kemCiphertext for AAD: the ciphertext was sealed with the
+            // original header (kemCiphertext=null) before it was attached.
+            val headerForAad = header.copy(kemCiphertext = null)
 
             try {
-                val plaintext = ratchet.decrypt(state, header, envelope.ciphertext)
+                val plaintext = ratchet.decrypt(state, headerForAad, envelope.ciphertext)
                 persistSession(sessionKeys.sessionId, state)
                 plaintext
             } catch (e: Exception) {

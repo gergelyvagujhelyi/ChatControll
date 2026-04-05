@@ -10,8 +10,11 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ConversationDao {
 
-    @Query("SELECT * FROM conversations ORDER BY lastMessageTimestamp DESC")
+    @Query("SELECT * FROM conversations WHERE isApproved = 1 ORDER BY lastMessageTimestamp DESC")
     fun getAll(): Flow<List<ConversationEntity>>
+
+    @Query("SELECT * FROM conversations WHERE isApproved = 0 ORDER BY lastMessageTimestamp DESC")
+    fun getMessageRequests(): Flow<List<ConversationEntity>>
 
     @Query("SELECT * FROM conversations WHERE id = :id")
     fun getById(id: String): Flow<ConversationEntity?>
@@ -21,6 +24,9 @@ interface ConversationDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(conversation: ConversationEntity)
+
+    @Query("UPDATE conversations SET isApproved = 1 WHERE id = :conversationId")
+    suspend fun approve(conversationId: String)
 
     @Query("UPDATE conversations SET unreadCount = 0 WHERE id = :conversationId")
     suspend fun clearUnread(conversationId: String)
