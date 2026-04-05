@@ -40,7 +40,8 @@ class KeyManager @Inject constructor(
     private val sessionCache = ConcurrentHashMap<String, SessionKeys>()
 
     fun hasIdentity(): Boolean {
-        return encryptedPrefs.contains(KEY_PUBLIC_SIGNING) &&
+        return encryptedPrefs.contains(KEY_USER_ID) &&
+            encryptedPrefs.contains(KEY_PUBLIC_SIGNING) &&
             encryptedPrefs.contains(KEY_PRIVATE_SIGNING) &&
             encryptedPrefs.contains(KEY_PUBLIC_IDENTITY) &&
             encryptedPrefs.contains(KEY_PRIVATE_IDENTITY)

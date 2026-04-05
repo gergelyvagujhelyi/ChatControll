@@ -257,6 +257,10 @@ class CallManager @Inject constructor(
 
     private suspend fun handleAnswer(signal: CallSignalDto) {
         val state = _callState.value ?: return
+        if (signal.callId != state.callId) {
+            Log.w(TAG, "Ignoring answer for unknown callId ${signal.callId.take(8)}")
+            return
+        }
         _callState.value = state.copy(status = CallStatus.CONNECTING)
 
         val sdpJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
@@ -274,6 +278,11 @@ class CallManager @Inject constructor(
     }
 
     private suspend fun handleIceCandidate(signal: CallSignalDto) {
+        val state = _callState.value ?: return
+        if (signal.callId != state.callId) {
+            Log.w(TAG, "Ignoring ICE candidate for unknown callId ${signal.callId.take(8)}")
+            return
+        }
         val candidateJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val candidate = json.decodeFromString<IceCandidateDto>(candidateJson)
 
