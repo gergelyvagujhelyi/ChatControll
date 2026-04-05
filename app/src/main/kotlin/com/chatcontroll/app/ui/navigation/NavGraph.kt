@@ -77,9 +77,11 @@ fun ChatNavGraph(
         ) {
             ChatScreen(
                 onBack = {
-                    if (!navController.popBackStack()) {
+                    if (navController.previousBackStackEntry != null) {
+                        navController.popBackStack()
+                    } else {
                         navController.navigate(Routes.CONVERSATIONS) {
-                            popUpTo(0) { inclusive = true }
+                            popUpTo(navController.graph.id) { inclusive = true }
                         }
                     }
                 },
@@ -97,13 +99,21 @@ fun ChatNavGraph(
             ),
         ) {
             CallScreen(
-                onCallEnded = { navController.popBackStack() },
+                onCallEnded = {
+                    if (navController.previousBackStackEntry != null) {
+                        navController.popBackStack()
+                    }
+                },
             )
         }
 
         composable(Routes.ADD_CONTACT) {
             AddContactScreen(
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    if (navController.previousBackStackEntry != null) {
+                        navController.popBackStack()
+                    }
+                },
                 onContactAdded = { conversationId, contactId ->
                     navController.navigate(Routes.chat(conversationId, contactId)) {
                         popUpTo(Routes.CONVERSATIONS)
@@ -114,7 +124,11 @@ fun ChatNavGraph(
 
         composable(Routes.SETTINGS) {
             SettingsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = {
+                    if (navController.previousBackStackEntry != null) {
+                        navController.popBackStack()
+                    }
+                },
                 onWiped = {
                     navController.navigate(Routes.ONBOARDING) {
                         popUpTo(0) { inclusive = true }
