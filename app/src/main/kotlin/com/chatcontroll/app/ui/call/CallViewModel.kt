@@ -17,19 +17,28 @@ class CallViewModel @Inject constructor(
 
     val callState: StateFlow<CallState?> = callManager.callState
 
-    init {
-        // If no active call, this is an outgoing call — initiate it
-        if (callManager.callState.value == null) {
-            val contactId: String = savedStateHandle["contactId"] ?: ""
-            val rawName: String? = savedStateHandle["displayName"]
-            val displayName = rawName?.let { Uri.decode(it) } ?: contactId.take(8)
-            if (contactId.isNotEmpty()) {
-                callManager.initiateCall(contactId, displayName)
-            }
+    private val pendingContactId: String = savedStateHandle["contactId"] ?: ""
+    private val pendingDisplayName: String = savedStateHandle.get<String>("displayName")
+        ?.let { Uri.decode(it) } ?: pendingContactId.take(8)
+
+    /** Whether the outgoing call has been initiated (guards against double-start). */
+    private var outgoingStarted = false
+
+    /**
+     * Called by the UI once microphone permission is confirmed.
+     * Initiates an outgoing call if no call is active, or accepts an incoming one.
+     */
+    fun onMicPermissionGranted() {
+        val current = callManager.callState.value
+        if (current == null && !outgoingStarted && pendingContactId.isNotEmpty()) {
+            outgoingStarted = true
+            callManager.initiateCall(pendingContactId, pendingDisplayName)
         }
     }
 
-    fun acceptCall() = callManager.acceptCall()
+    fun acceptCall() {
+        callManager.acceptCall()
+    }
     fun rejectCall() = callManager.rejectCall()
     fun hangup() = callManager.hangup()
     fun toggleMute() = callManager.toggleMute()

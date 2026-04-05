@@ -53,15 +53,28 @@ fun CallScreen(
     val context = LocalContext.current
     val callState by viewModel.callState.collectAsState()
 
-    // Request RECORD_AUDIO permission
+    // Request RECORD_AUDIO permission before starting any call.
+    // On grant: start outgoing call or accept pending incoming call.
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { granted ->
+        if (granted) {
+            val state = viewModel.callState.value
+            if (state?.direction == CallDirection.INCOMING && state.status == CallStatus.RINGING) {
+                viewModel.acceptCall()
+            } else {
+                viewModel.onMicPermissionGranted()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
+            == PackageManager.PERMISSION_GRANTED
         ) {
+            // Already granted — start the call immediately
+            viewModel.onMicPermissionGranted()
+        } else {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -135,7 +148,15 @@ fun CallScreen(
                         Icon(Icons.Default.CallEnd, contentDescription = "Decline", modifier = Modifier.size(32.dp))
                     }
                     FilledIconButton(
-                        onClick = viewModel::acceptCall,
+                        onClick = {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                viewModel.acceptCall()
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
                         modifier = Modifier.size(72.dp),
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(
