@@ -49,6 +49,14 @@ class MessageRepositoryImpl @Inject constructor(
     /** Track peers already notified with session_reset to avoid duplicate signals. */
     private val sessionResetSentTo = mutableSetOf<String>()
 
+    /** The conversation currently open on screen — skip unread increment for it. */
+    @Volatile
+    private var activeConversationId: String? = null
+
+    override fun setActiveConversation(conversationId: String?) {
+        activeConversationId = conversationId
+    }
+
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
             entities.map { it.toDomain(keyManager.getUserId() ?: "") }
@@ -326,7 +334,7 @@ class MessageRepositoryImpl @Inject constructor(
                 dto.senderId,
                 plaintextStr,
                 dto.timestamp,
-                incrementUnread = true,
+                incrementUnread = conversationId != activeConversationId,
             )
         }
 

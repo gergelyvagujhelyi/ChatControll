@@ -54,6 +54,8 @@ class ChatViewModel @Inject constructor(
     val isReEstablishing: StateFlow<Boolean> = _isReEstablishing.asStateFlow()
 
     init {
+        // Mark this conversation as active so incoming messages don't bump unread
+        messageRepository.setActiveConversation(conversationId)
         // Clear unread badge when conversation is opened
         viewModelScope.launch {
             conversationRepository.clearUnread(conversationId)
@@ -68,6 +70,11 @@ class ChatViewModel @Inject constructor(
                 kotlinx.coroutines.delay(15_000)
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        messageRepository.setActiveConversation(null)
     }
 
     fun updateComposer(text: String) {

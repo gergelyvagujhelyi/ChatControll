@@ -13,4 +13,7 @@ interface MessageRepository {
     suspend fun deleteMessagesOlderThan(conversationId: String, timestampMillis: Long)
     suspend fun fetchPendingFromServer()
     suspend fun reEstablishSession(contactId: String)
+    /** Set the conversation the user is currently viewing. Messages arriving for
+     *  this conversation will not increment the unread counter. Pass null on exit. */
+    fun setActiveConversation(conversationId: String?)
 }
