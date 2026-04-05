@@ -507,6 +507,7 @@ class MessageRepositoryImpl @Inject constructor(
                 lastMessageTimestamp = timestamp,
                 unreadCount = if (incrementUnread) currentUnread + 1 else currentUnread,
                 isEncrypted = true,
+                isApproved = existing?.isApproved ?: true,
             )
         )
     }
