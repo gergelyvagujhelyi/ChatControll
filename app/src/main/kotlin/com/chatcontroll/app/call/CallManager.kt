@@ -143,17 +143,22 @@ class CallManager @Inject constructor(
                 var contact = contactDao.getByUserId(signal.senderId)
                 var needsPersist = false
                 if (contact == null) {
-                    // Unknown sender — fetch their key bundle from the server
-                    // for signature verification. Do NOT persist yet — only
-                    // save after the signature is verified to prevent an
-                    // attacker from polluting the contacts table.
-                    logDebug("Contact not found locally for ${signal.senderId.take(8)}, fetching from server")
-                    contact = fetchContactBundle(signal.senderId)
+                    // Check if we already fetched this contact for a pending call
+                    // — avoids redundant network fetches for ICE candidates.
+                    contact = _pendingNewContact?.takeIf { it.userId == signal.senderId }
                     if (contact == null) {
-                        logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)} — server lookup failed")
-                        return@launch
+                        // Unknown sender — fetch their key bundle from the server
+                        // for signature verification. Do NOT persist yet — only
+                        // save after the signature is verified to prevent an
+                        // attacker from polluting the contacts table.
+                        logDebug("Contact not found locally for ${signal.senderId.take(8)}, fetching from server")
+                        contact = fetchContactBundle(signal.senderId)
+                        if (contact == null) {
+                            logWarn("Rejecting call signal from unknown contact ${signal.senderId.take(8)} — server lookup failed")
+                            return@launch
+                        }
+                        logDebug("Fetched key bundle for ${signal.senderId.take(8)}")
                     }
-                    logDebug("Fetched key bundle for ${signal.senderId.take(8)}")
                     needsPersist = true
                 }
                 val sigPayload = lengthPrefixed(signal.senderId.toByteArray(Charsets.UTF_8)) +
@@ -171,12 +176,9 @@ class CallManager @Inject constructor(
                 // For known contacts, no persistence needed.
                 // For unknown contacts calling us, defer persistence until the
                 // user explicitly accepts the call (see acceptCall).
-                if (needsPersist && signal.signalType != "call_offer") {
-                    // Non-offer signals (ICE, hangup) for an already-ringing call
-                    // from a new contact — persist now since the offer was accepted.
-                    contactDao.upsert(contact)
-                    logDebug("Persisted new contact ${signal.senderId.take(8)}")
-                } else if (needsPersist) {
+                if (needsPersist && _pendingNewContact?.userId != signal.senderId) {
+                    // Always defer persistence — only persist when user
+                    // explicitly accepts the call (see acceptCall).
                     _pendingNewContact = contact
                     logDebug("Deferring contact persistence for ${signal.senderId.take(8)} until call accepted")
                 }
@@ -250,6 +252,10 @@ class CallManager @Inject constructor(
             isNewContact = isNewContact,
         )
         _pendingOfferPayload = signal.encryptedPayload
+
+        // Callee-side ringing timeout — safety net in case the caller's
+        // hangup signal is lost due to network issues.
+        startCalleeRingingTimeout(signal.callId)
     }
 
     fun acceptCall() {
@@ -346,6 +352,7 @@ class CallManager @Inject constructor(
 
     private var _pendingOfferPayload: String? = null
     /** Contact fetched from the server for an unknown caller — persisted only on accept. */
+    @Volatile
     private var _pendingNewContact: com.chatcontroll.app.data.local.entity.ContactEntity? = null
 
     private fun startRingingTimeout(callId: String) {
@@ -357,6 +364,20 @@ class CallManager @Inject constructor(
                 logWarn("Ringing timeout — no answer after ${RINGING_TIMEOUT_MS / 1000}s")
                 sendSignal(state.peerId, "call_hangup", callId, "")
                 endCall(CallStatus.UNAVAILABLE)
+            }
+        }
+    }
+
+    private fun startCalleeRingingTimeout(callId: String) {
+        ringingTimeoutJob?.cancel()
+        ringingTimeoutJob = scope.launch {
+            kotlinx.coroutines.delay(CALLEE_RINGING_TIMEOUT_MS)
+            val state = _callState.value
+            if (state != null && state.callId == callId && state.status == CallStatus.RINGING
+                && state.direction == CallDirection.INCOMING
+            ) {
+                logWarn("Callee ringing timeout — not answered after ${CALLEE_RINGING_TIMEOUT_MS / 1000}s")
+                endCall(CallStatus.ENDED)
             }
         }
     }
@@ -450,6 +471,14 @@ class CallManager @Inject constructor(
         try {
             val localUserId = keyManager.getUserId() ?: return
             val peerId = callState.peerId
+
+            // Don't create orphaned conversations for contacts not in the DB
+            // (e.g., declined/missed calls from unknown callers)
+            if (contactDao.getByUserId(peerId) == null) {
+                logDebug("Skipping call event recording — contact ${peerId.take(8)} not persisted")
+                return
+            }
+
             val isOutgoing = callState.direction == CallDirection.OUTGOING
 
             // Determine the call duration (0 if never connected)
@@ -490,7 +519,13 @@ class CallManager @Inject constructor(
 
             // Update the conversation preview
             val preview = when (messageState) {
-                MessageState.CALL_OUTGOING -> if (durationSeconds > 0) "Voice call" else "Outgoing call"
+                MessageState.CALL_OUTGOING -> when {
+                    durationSeconds > 0 -> "Voice call"
+                    endStatus == CallStatus.REJECTED -> "Call declined"
+                    endStatus == CallStatus.BUSY -> "Busy"
+                    endStatus == CallStatus.UNAVAILABLE -> "No answer"
+                    else -> "Outgoing call"
+                }
                 MessageState.CALL_INCOMING -> "Voice call"
                 MessageState.CALL_MISSED -> "Missed call"
                 else -> "Call"
@@ -862,8 +897,10 @@ class CallManager @Inject constructor(
         private const val SIGNATURE_TTL_MS = 5 * 60 * 1000L // 5 minutes
         private const val MAX_SEEN_SIGNATURES = 500
         private const val SIGNAL_SEND_RETRIES = 3
-        /** How long to wait in RINGING before giving up (ms). */
+        /** How long to wait in RINGING before giving up (ms) — caller side. */
         private const val RINGING_TIMEOUT_MS = 35_000L
+        /** Callee ringing timeout — longer than caller's so caller hangup arrives first. */
+        private const val CALLEE_RINGING_TIMEOUT_MS = 45_000L
     }
 }
 
