@@ -116,7 +116,7 @@ class ChatNotificationManager @Inject constructor(
     }
 
     fun cancelNotification(conversationId: String) {
-        NotificationManagerCompat.from(context).cancel(conversationId.hashCode())
+        NotificationManagerCompat.from(context).cancel(conversationId.hashCode() and Int.MAX_VALUE)
     }
 
     private fun hasNotificationPermission(): Boolean {

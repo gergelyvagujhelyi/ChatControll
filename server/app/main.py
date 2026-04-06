@@ -210,6 +210,6 @@ async def health_check() -> HealthResponse:
     except Exception:
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "version": "0.3.4", "detail": "Database unreachable"},
+            content={"status": "unhealthy", "version": app.version, "detail": "Database unreachable"},
         )
     return HealthResponse()

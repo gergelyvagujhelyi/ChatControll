@@ -222,6 +222,12 @@ class RatchetSessionManager @Inject constructor(
             require(header.messageNumber >= 0) { "Negative messageNumber in ratchet header" }
             require(header.previousChainLength >= 0) { "Negative previousChainLength in ratchet header" }
             require(header.publicKey.isNotEmpty()) { "Empty publicKey in ratchet header" }
+            val decodedPk = try {
+                Base64.getDecoder().decode(header.publicKey)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("Invalid base64 in ratchet header publicKey", e)
+            }
+            require(decodedPk.size == 32) { "Ratchet header publicKey must be 32 bytes (X25519), got ${decodedPk.size}" }
 
             // Strip kemCiphertext for AAD: the ciphertext was sealed with the
             // original header (kemCiphertext=null) before it was attached.

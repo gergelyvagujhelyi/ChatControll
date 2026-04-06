@@ -5,6 +5,7 @@ import com.chatcontroll.app.domain.repository.MessageRepository
 import com.chatcontroll.app.domain.repository.PushTokenRepository
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import android.util.Log
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,8 +33,8 @@ class FcmService : FirebaseMessagingService() {
         scope.launch {
             try {
                 pushTokenRepository.registerToken(token)
-            } catch (_: Exception) {
-                // Will retry via WorkManager
+            } catch (e: Exception) {
+                Log.w("FcmService", "Token registration failed, will retry via WorkManager: ${e.message}")
             }
         }
     }
@@ -52,8 +53,8 @@ class FcmService : FirebaseMessagingService() {
         scope.launch {
             try {
                 messageRepository.fetchPendingFromServer()
-            } catch (_: Exception) {
-                // Best-effort sync
+            } catch (e: Exception) {
+                Log.w("FcmService", "FCM-triggered message fetch failed: ${e.message}")
             }
         }
     }
