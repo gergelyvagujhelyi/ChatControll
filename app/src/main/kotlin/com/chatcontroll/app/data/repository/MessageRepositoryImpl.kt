@@ -97,7 +97,7 @@ class MessageRepositoryImpl @Inject constructor(
             peerMutex.withLock {
                 var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
                 if (sessionKeys == null) {
-                    sessionKeys = tryEstablishSession(recipientId)
+                    sessionKeys = tryEstablishSession(recipientId, encapsulateIfAvailable = true)
                         ?: throw IllegalStateException("No session established with $recipientId")
                 }
                 cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
@@ -156,7 +156,7 @@ class MessageRepositoryImpl @Inject constructor(
             // Re-encrypt with current ratchet state instead of sending stale ciphertext
             var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
             if (sessionKeys == null) {
-                sessionKeys = tryEstablishSession(entity.recipientId)
+                sessionKeys = tryEstablishSession(entity.recipientId, encapsulateIfAvailable = true)
                     ?: throw IllegalStateException("No session for retry")
             }
 
@@ -346,6 +346,7 @@ class MessageRepositoryImpl @Inject constructor(
     private suspend fun tryEstablishSession(
         remoteUserId: String,
         inboundKemCiphertext: ByteArray? = null,
+        encapsulateIfAvailable: Boolean = false,
     ): SessionKeys? {
         return try {
             val bundle = apiService.fetchKeyBundle(remoteUserId) ?: return null
@@ -372,15 +373,18 @@ class MessageRepositoryImpl @Inject constructor(
                 }
             } else ByteArray(0)
 
-            // Only pass PQC key when we have inbound KEM ciphertext to decapsulate.
-            // Without it, we would encapsulate and derive a hybrid root key that
-            // doesn't match the sender's existing session.
+            // Pass PQC key when:
+            //  (a) decapsulating inbound KEM from a received message, OR
+            //  (b) encapsulating for a NEW outgoing session (sender path).
+            // Do NOT encapsulate when receiving a classical-only message —
+            // that would create a hybrid root key that the sender never derived.
+            val usePqcKey = inboundKemCiphertext != null || encapsulateIfAvailable
             val sessionKeys = cryptoEngine.establishSession(
                 localIdentity = localKeyPair,
                 remotePublicBundle = PublicKeyBundle(
                     publicSigningKey = pubSignKey,
                     publicIdentityKey = pubIdKey,
-                    pqcEncapsulationKey = if (inboundKemCiphertext != null) pqcKey else ByteArray(0),
+                    pqcEncapsulationKey = if (usePqcKey) pqcKey else ByteArray(0),
                 ),
                 inboundKemCiphertext = inboundKemCiphertext,
             )
