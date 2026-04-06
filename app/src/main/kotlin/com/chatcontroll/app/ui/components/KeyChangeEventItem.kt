@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PersonOff
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -22,11 +23,15 @@ fun KeyChangeEventItem(
     timestamp: String,
     modifier: Modifier = Modifier,
 ) {
+    val isAccountDeleted = state == MessageState.ACCOUNT_DELETED
     val label = when (state) {
         MessageState.KEY_ROTATED_LOCAL -> "You rotated your keys"
         MessageState.KEY_ROTATED_REMOTE -> "Peer rotated their keys"
+        MessageState.ACCOUNT_DELETED -> "Peer deleted their account"
         else -> "Keys changed"
     }
+    val icon = if (isAccountDeleted) Icons.Default.PersonOff else Icons.Default.VpnKey
+    val tint = if (isAccountDeleted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
 
     Row(
         modifier = modifier
@@ -36,9 +41,9 @@ fun KeyChangeEventItem(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = Icons.Default.VpnKey,
+            imageVector = icon,
             contentDescription = label,
-            tint = MaterialTheme.colorScheme.tertiary,
+            tint = tint,
             modifier = Modifier.size(16.dp),
         )
         Text(

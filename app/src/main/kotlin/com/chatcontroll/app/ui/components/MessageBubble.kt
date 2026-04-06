@@ -97,7 +97,7 @@ private fun MessageStateIcon(state: MessageState) {
         MessageState.REJECTED -> Icons.Default.Block to MaterialTheme.colorScheme.error
         // Call/key events are rendered by their own composables — but keep the when exhaustive
         MessageState.CALL_OUTGOING, MessageState.CALL_OUTGOING_MISSED, MessageState.CALL_INCOMING, MessageState.CALL_MISSED,
-        MessageState.KEY_ROTATED_LOCAL, MessageState.KEY_ROTATED_REMOTE ->
+        MessageState.KEY_ROTATED_LOCAL, MessageState.KEY_ROTATED_REMOTE, MessageState.ACCOUNT_DELETED ->
             Icons.Default.Check to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
     }
     Icon(

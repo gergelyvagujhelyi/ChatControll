@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.SessionResetSender
+import com.chatcontroll.app.crypto.SessionResetSender.Companion.CTRL_ACCOUNT_DELETED
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.dao.ConversationDao
 import com.chatcontroll.app.data.local.dao.MessageDao
@@ -65,25 +66,37 @@ class SettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun wipeLocalData() {
-        // Notify all contacts that our session is being invalidated, and
-        // delete the server-side identity BEFORE wiping local keys.
-        // Best-effort — don't block wipe if the server is unreachable.
-        try {
-            val senderId = keyManager.getUserId()
-            if (senderId != null) {
+        val senderId = keyManager.getUserId()
+        if (senderId != null) {
+            // Notify contacts — best-effort
+            try {
                 val contacts = contactDao.getAll().first()
                 for (contact in contacts) {
                     try {
-                        sessionResetSender.send(contact.userId)
+                        sessionResetSender.send(contact.userId, SessionResetSender.CTRL_ACCOUNT_DELETED)
                     } catch (_: Exception) { /* best effort */ }
                 }
-                try {
-                    apiService.deleteIdentity()
-                } catch (_: Exception) { /* best effort */ }
-            }
-        } catch (_: Exception) { /* best effort */ }
+            } catch (_: Exception) { /* best effort */ }
 
-        // Disconnect WebSocket and wipe all local state
+            // Delete server identity BEFORE wiping local keys.
+            // If this fails, keys are preserved so the user can retry.
+            apiService.deleteIdentity()
+        }
+
+        // Server identity deleted (or no identity) — wipe local state
+        wipeLocal()
+    }
+
+    override suspend fun retryServerDeletion() {
+        apiService.deleteIdentity()
+        wipeLocal()
+    }
+
+    override suspend fun wipeLocalOnly() {
+        wipeLocal()
+    }
+
+    private suspend fun wipeLocal() {
         webSocketClient.disconnect()
         messageDao.deleteAll()
         conversationDao.deleteAll()

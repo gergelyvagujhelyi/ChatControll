@@ -21,16 +21,18 @@ enum class MessageState {
     /** Local user rotated their identity keys. */
     KEY_ROTATED_LOCAL,
     /** Remote peer rotated their identity keys (session_reset received). */
-    KEY_ROTATED_REMOTE;
+    KEY_ROTATED_REMOTE,
+    /** Remote peer deleted their account. */
+    ACCOUNT_DELETED;
 
     val isTerminal: Boolean
         get() = this == DELIVERED || this == SEEN || this == FAILED || this == DECRYPT_FAILED || this == REJECTED
-                || isCallEvent || isKeyChangeEvent
+                || isCallEvent || isKeyChangeEvent || this == ACCOUNT_DELETED
 
     val isCallEvent: Boolean
         get() = this == CALL_OUTGOING || this == CALL_OUTGOING_MISSED
                 || this == CALL_INCOMING || this == CALL_MISSED
 
     val isKeyChangeEvent: Boolean
-        get() = this == KEY_ROTATED_LOCAL || this == KEY_ROTATED_REMOTE
+        get() = this == KEY_ROTATED_LOCAL || this == KEY_ROTATED_REMOTE || this == ACCOUNT_DELETED
 }

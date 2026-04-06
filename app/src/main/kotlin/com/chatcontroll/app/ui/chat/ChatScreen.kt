@@ -73,6 +73,7 @@ fun ChatScreen(
     val isReEstablishing by viewModel.isReEstablishing.collectAsState()
     val encryptionInfo by viewModel.encryptionInfo.collectAsState()
     val needsSessionReset = conversation?.needsSessionReset == true
+    val peerDeleted = conversation?.peerDeleted == true
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -216,17 +217,27 @@ fun ChatScreen(
                 }
             }
 
-            // Session reset banner
+            // Session reset / account deleted banner
             if (needsSessionReset) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.errorContainer)
-                        .clickable(enabled = !isReEstablishing) { viewModel.reEstablishSession() }
+                        .then(
+                            if (!peerDeleted && !isReEstablishing)
+                                Modifier.clickable { viewModel.reEstablishSession() }
+                            else Modifier
+                        )
                         .padding(12.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (isReEstablishing) {
+                    if (peerDeleted) {
+                        Text(
+                            text = "This user has deleted their account.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    } else if (isReEstablishing) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -264,7 +275,11 @@ fun ChatScreen(
                     modifier = Modifier.weight(1f),
                     enabled = !needsSessionReset,
                     placeholder = {
-                        Text(if (needsSessionReset) "Tap banner to resume sending" else "Message")
+                        Text(
+                            if (peerDeleted) "User deleted their account"
+                            else if (needsSessionReset) "Tap banner to resume sending"
+                            else "Message"
+                        )
                     },
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,

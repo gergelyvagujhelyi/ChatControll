@@ -92,6 +92,10 @@ class ChatViewModel @Inject constructor(
     fun send() {
         val text = _composerText.value.trim()
         if (text.isBlank()) return
+        if (conversation.value?.peerDeleted == true) {
+            _sendError.value = "This user has deleted their account."
+            return
+        }
         if (conversation.value?.needsSessionReset == true) {
             _sendError.value = "Peer rotated keys. Tap the banner above to resume sending."
             return

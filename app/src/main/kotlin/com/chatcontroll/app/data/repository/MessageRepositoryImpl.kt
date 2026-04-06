@@ -545,45 +545,52 @@ class MessageRepositoryImpl @Inject constructor(
                 ?.content
         } catch (_: Exception) { return false }
 
-        if (ctrl != "session_reset") return false
+        val isAccountDeleted = ctrl == "account_deleted"
+        if (ctrl != "session_reset" && !isAccountDeleted) return false
 
         // Verify signature using the sender's CURRENT key from the server
-        // (their locally stored key may be outdated after rotation)
+        // (their locally stored key may be outdated after rotation).
+        // For account_deleted the sender's identity may already be gone from
+        // the server, so fall back to the locally stored key.
         val bundle = try {
             apiService.fetchKeyBundle(dto.senderId)
         } catch (_: Exception) { null }
 
-        if (bundle != null && dto.signature.isNotEmpty()) {
-            val localUserId = keyManager.getUserId() ?: ""
-            val pubSignKey = try {
-                Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
-            } catch (_: Exception) { null }
-            val pubIdKey = try {
-                Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
-            } catch (_: Exception) { null }
+        val localUserId = keyManager.getUserId() ?: ""
 
-            if (pubSignKey != null) {
-                val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
-                val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
-                val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
-                if (!valid) {
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
-                        "session_reset signature invalid from ${dto.senderId.take(8)}")
-                    receivedIds.add(dto.messageId)
-                    return true
-                }
+        // Determine the signing key to verify against
+        val existingContact = contactDao.getByUserId(dto.senderId)
+        val pubSignKey = if (bundle != null) {
+            try { Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP) } catch (_: Exception) { null }
+        } else {
+            existingContact?.publicSigningKey
+        }
+        val pubIdKey = if (bundle != null) {
+            try { Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP) } catch (_: Exception) { null }
+        } else {
+            existingContact?.publicIdentityKey
+        }
 
+        if (pubSignKey != null && dto.signature.isNotEmpty()) {
+            val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
+            val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+            val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
+            if (!valid) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                    "$ctrl signature invalid from ${dto.senderId.take(8)}")
+                receivedIds.add(dto.messageId)
+                return true
+            }
+
+            if (!isAccountDeleted && existingContact != null && pubIdKey != null) {
                 // Update the contact's stored keys to the new ones.
                 // Reset pqcEstablished so the classical-only re-establish
                 // isn't rejected by the PQC downgrade guard.
-                val existingContact = contactDao.getByUserId(dto.senderId)
-                if (existingContact != null && pubIdKey != null) {
-                    contactDao.upsert(existingContact.copy(
-                        publicSigningKey = pubSignKey,
-                        publicIdentityKey = pubIdKey,
-                        pqcEstablished = false,
-                    ))
-                }
+                contactDao.upsert(existingContact.copy(
+                    publicSigningKey = pubSignKey,
+                    publicIdentityKey = pubIdKey,
+                    pqcEstablished = false,
+                ))
             }
         }
 
@@ -594,9 +601,12 @@ class MessageRepositoryImpl @Inject constructor(
 
         // Mark conversation as needing session re-establishment
         conversationDao.setNeedsSessionReset(dto.senderId, true)
+        if (isAccountDeleted) {
+            conversationDao.setPeerDeleted(dto.senderId, true)
+        }
 
-        // Record a key-change event in the chat history
-        val localUserId = keyManager.getUserId() ?: ""
+        // Record event in the chat history
+        val eventState = if (isAccountDeleted) MessageState.ACCOUNT_DELETED else MessageState.KEY_ROTATED_REMOTE
         val conversationId = getOrCreateConversationId(dto.senderId)
         messageDao.insert(MessageEntity(
             id = "keychange-${dto.messageId}",
@@ -606,14 +616,14 @@ class MessageRepositoryImpl @Inject constructor(
             encryptedBody = ByteArray(0),
             nonce = ByteArray(0),
             plaintext = "",
-            state = MessageState.KEY_ROTATED_REMOTE.name,
+            state = eventState.name,
             timestamp = kotlinx.datetime.Clock.System.now().toEpochMilliseconds(),
             expiresAt = null,
             isOutgoing = false,
         ))
 
         if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.i("MessageRepo",
-            "Session reset received from ${dto.senderId.take(8)}, session cleared")
+            "$ctrl received from ${dto.senderId.take(8)}, session cleared")
 
         receivedIds.add(dto.messageId)
         return true

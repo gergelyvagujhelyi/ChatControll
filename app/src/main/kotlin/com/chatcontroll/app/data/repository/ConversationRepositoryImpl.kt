@@ -85,5 +85,6 @@ private fun ConversationEntity.toDomain(): Conversation {
         isEncrypted = isEncrypted,
         isApproved = isApproved,
         needsSessionReset = needsSessionReset,
+        peerDeleted = peerDeleted,
     )
 }

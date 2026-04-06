@@ -14,4 +14,5 @@ data class ConversationEntity(
     val isEncrypted: Boolean,
     val isApproved: Boolean = true,
     val needsSessionReset: Boolean = false,
+    val peerDeleted: Boolean = false,
 )

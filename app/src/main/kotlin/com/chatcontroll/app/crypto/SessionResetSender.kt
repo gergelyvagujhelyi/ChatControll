@@ -7,7 +7,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Sends a signed `session_reset` control message to a peer.
+ * Sends a signed control message (e.g. `session_reset`, `account_deleted`) to a peer.
  *
  * Used by both [SettingsRepositoryImpl] (wipe-all) and
  * [MessageRepositoryImpl] (decrypt-failure recovery) to avoid
@@ -22,9 +22,9 @@ class SessionResetSender @Inject constructor(
      * Send a session_reset control message to [recipientId].
      * Returns silently if no local identity exists.
      */
-    suspend fun send(recipientId: String) {
+    suspend fun send(recipientId: String, ctrl: String = CTRL_SESSION_RESET) {
         val senderId = keyManager.getUserId() ?: return
-        val controlPayload = """{"ctrl":"session_reset"}"""
+        val controlPayload = """{"ctrl":"$ctrl"}"""
         val nonceBytes = controlPayload.toByteArray(Charsets.UTF_8)
         val bodyBytes = ByteArray(0)
 
@@ -39,5 +39,10 @@ class SessionResetSender @Inject constructor(
                 signature = Base64.encodeToString(signature, Base64.NO_WRAP),
             )
         )
+    }
+
+    companion object {
+        const val CTRL_SESSION_RESET = "session_reset"
+        const val CTRL_ACCOUNT_DELETED = "account_deleted"
     }
 }
