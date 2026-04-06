@@ -33,6 +33,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -74,6 +77,7 @@ fun ChatScreen(
     val encryptionInfo by viewModel.encryptionInfo.collectAsState()
     val needsSessionReset = conversation?.needsSessionReset == true
     val peerDeleted = conversation?.peerDeleted == true
+    val isMessageRequest = conversation?.isApproved == false
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -258,6 +262,43 @@ fun ChatScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
+                    }
+                }
+            }
+
+            // Message request accept/reject banner
+            if (isMessageRequest) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(12.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "This is a message request. Accept to reply.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            FilledTonalButton(onClick = { viewModel.acceptMessageRequest() }) {
+                                Text("Accept")
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.rejectMessageRequest { onBack() } },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error,
+                                ),
+                            ) {
+                                Text("Reject")
+                            }
+                        }
                     }
                 }
             }
