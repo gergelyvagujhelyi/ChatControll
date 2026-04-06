@@ -310,11 +310,7 @@ class CallManager @Inject constructor(
                 logDebug("Created answer SDP")
 
                 remoteDescriptionSet = true
-                logDebug("Applying ${pendingIceCandidates.size} pending ICE candidates")
-                for (candidate in pendingIceCandidates) {
-                    webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
-                }
-                pendingIceCandidates.clear()
+                drainPendingIceCandidates()
 
                 sendSignal(state.peerId, "call_answer", state.callId, json.encodeToString(SdpPayload(answerSdp)))
                 logDebug("call_answer sent")
@@ -401,12 +397,22 @@ class CallManager @Inject constructor(
         webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
 
         remoteDescriptionSet = true
-        for (candidate in pendingIceCandidates) {
-            webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
-        }
-        pendingIceCandidates.clear()
+        drainPendingIceCandidates()
 
         requestAudioFocus()
+    }
+
+    /** Atomically snapshot + clear pendingIceCandidates, then apply to WebRTC. */
+    private fun drainPendingIceCandidates() {
+        val snapshot: List<IceCandidateDto>
+        synchronized(pendingIceCandidates) {
+            snapshot = pendingIceCandidates.toList()
+            pendingIceCandidates.clear()
+        }
+        logDebug("Applying ${snapshot.size} pending ICE candidates")
+        for (candidate in snapshot) {
+            webRtcEngine?.addIceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)
+        }
     }
 
     /** Process ICE candidate payload — called outside signalMutex after validation. */
@@ -789,7 +795,7 @@ class CallManager @Inject constructor(
         val sessionKeys = SessionKeys(
             sendKey = if (isInitiator) chainA else chainB,
             receiveKey = if (isInitiator) chainB else chainA,
-            sessionId = "call-${peerId.take(16)}",
+            sessionId = "call-$peerId",
             pqcEstablished = false,
         )
 

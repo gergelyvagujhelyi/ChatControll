@@ -169,7 +169,20 @@ class RatchetSessionManager @Inject constructor(
 
             val headerJson = json.encodeToString(finalHeader)
 
-            persistSession(sessionKeys.sessionId, state)
+            try {
+                persistSession(sessionKeys.sessionId, state)
+            } catch (e: Exception) {
+                // ratchet.encrypt() mutated state in-place. On persistence
+                // failure, rollback in-memory state to match disk — same
+                // pattern as decrypt.
+                val restored = loadPersistedSession(sessionKeys.sessionId)
+                if (restored != null) {
+                    sessions[sessionKeys.sessionId] = restored
+                } else {
+                    sessions.remove(sessionKeys.sessionId)
+                }
+                throw e
+            }
 
             EncryptedEnvelope(
                 ciphertext = ciphertext,
