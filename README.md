@@ -186,6 +186,8 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 16. **Push notification fix (v0.3.10)** — FCM push payload now includes sender ID for notification routing. Notifications are now shown by `MessageRepositoryImpl` after decryption, displaying the real sender name and decrypted message body instead of generic "New encrypted message" text. Notifications are suppressed when the conversation is already open. On FCM receipt, WebSocket is reconnected to flush buffered call signals.
 
+17. **QA bug fixes (v0.3.9 / server v0.3.4)** — Fixed race conditions in WebSocket client connection management and call signal processing. Eliminated resource leak from `HttpClient` recreation on each WebSocket reconnect (reverted to singleton). Fixed rate limiter bypass where disconnecting reset per-user quota — rate limit state is now preserved across reconnects and pruned periodically. Improved rate limiter pruning performance under load with high-water mark and time-gated scans. Fixed replay cache eviction, `ContactEntity` equality, share code mismatch, and concurrent `_pendingNewContact` access during calls.
+
 ## Next Priorities
 
 1. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.

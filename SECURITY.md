@@ -147,6 +147,10 @@ Call signaling has been progressively hardened:
 - **v0.3.7**: Call signals now have FCM push fallback and server-side buffering (30s TTL) for offline recipients. The client checks the `delivered` field from `CallSignalResponse` instead of assuming delivery on HTTP success. `sendSignal()` only retries on network errors — if the server accepted but couldn't deliver (recipient offline), the signal is already buffered and FCM push is sent, so client retries would be redundant. `hangup()`/`rejectCall()` end the call UI immediately and send the signal fire-and-forget in the background (no UI blocking). A 35s ringing timeout ends unanswered calls with `UNAVAILABLE` status.
 - **v0.3.8**: Calls to newly added contacts (no prior messages) no longer silently fail. Unknown callers are resolved by fetching their key bundle from the server, with signature verification before persisting the contact. Contact resolution runs outside the signal mutex to avoid blocking ICE candidate processing during network requests.
 
+### Rate Limiter Hardening (server v0.3.4)
+- **Disconnect bypass fix**: Per-user WebSocket signal rate limit state is no longer cleared on disconnect. Previously, a malicious user could reset their quota by reconnecting. Stale entries are pruned periodically (idle > 5 min) instead.
+- **Pruning performance**: Rate limit pruning in both WebSocket and REST call signaling routers now uses a high-water mark (2000 entries) with time-gated scans (once per 60s) to avoid O(N) dictionary iteration under the global lock on every request.
+
 ### Certificate Pinning
 Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry.
 
