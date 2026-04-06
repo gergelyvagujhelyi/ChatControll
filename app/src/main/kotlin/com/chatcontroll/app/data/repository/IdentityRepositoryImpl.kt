@@ -180,6 +180,19 @@ class IdentityRepositoryImpl @Inject constructor(
         )
         keyManager.cacheSessionKeys(contact.userId, sessionKeys)
 
+        // Sync the contact's PQC flag now that the session is established
+        if (sessionKeys.pqcEstablished) {
+            contactDao.upsert(
+                ContactEntity(
+                    userId = contact.userId,
+                    displayName = contact.displayName,
+                    publicIdentityKey = contact.publicIdentityKey,
+                    publicSigningKey = contact.publicSigningKey,
+                    pqcEstablished = true,
+                )
+            )
+        }
+
         return contact
     }
 
