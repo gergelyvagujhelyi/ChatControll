@@ -93,7 +93,7 @@ class ChatViewModel @Inject constructor(
         val text = _composerText.value.trim()
         if (text.isBlank()) return
         if (conversation.value?.needsSessionReset == true) {
-            _sendError.value = "Session expired. Tap \"Re-establish session\" first."
+            _sendError.value = "Peer rotated keys. Tap the banner above to resume sending."
             return
         }
         if (conversation.value?.isApproved == false) {

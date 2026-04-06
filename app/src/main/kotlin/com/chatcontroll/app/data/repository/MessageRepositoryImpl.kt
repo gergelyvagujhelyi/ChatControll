@@ -595,6 +595,23 @@ class MessageRepositoryImpl @Inject constructor(
         // Mark conversation as needing session re-establishment
         conversationDao.setNeedsSessionReset(dto.senderId, true)
 
+        // Record a key-change event in the chat history
+        val localUserId = keyManager.getUserId() ?: ""
+        val conversationId = getOrCreateConversationId(dto.senderId)
+        messageDao.insert(MessageEntity(
+            id = "keychange-${dto.messageId}",
+            conversationId = conversationId,
+            senderId = dto.senderId,
+            recipientId = localUserId,
+            encryptedBody = ByteArray(0),
+            nonce = ByteArray(0),
+            plaintext = "",
+            state = MessageState.KEY_ROTATED_REMOTE.name,
+            timestamp = kotlinx.datetime.Clock.System.now().toEpochMilliseconds(),
+            expiresAt = null,
+            isOutgoing = false,
+        ))
+
         if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.i("MessageRepo",
             "Session reset received from ${dto.senderId.take(8)}, session cleared")
 

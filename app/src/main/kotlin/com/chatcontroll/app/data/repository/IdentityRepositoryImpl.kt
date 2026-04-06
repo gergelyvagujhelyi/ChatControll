@@ -4,12 +4,16 @@ import android.util.Base64
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.SessionResetSender
 import com.chatcontroll.app.data.local.dao.ContactDao
+import com.chatcontroll.app.data.local.dao.ConversationDao
+import com.chatcontroll.app.data.local.dao.MessageDao
 import com.chatcontroll.app.data.local.entity.ContactEntity
+import com.chatcontroll.app.data.local.entity.MessageEntity
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.dto.BootstrapRequest
 import com.chatcontroll.app.data.remote.dto.KeyRotationRequest
 import com.chatcontroll.app.domain.model.Contact
 import com.chatcontroll.app.domain.model.Identity
+import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.domain.model.KeyType
 import com.chatcontroll.app.domain.repository.CryptoEngine
@@ -31,6 +35,8 @@ class IdentityRepositoryImpl @Inject constructor(
     private val keyManager: KeyManager,
     private val apiService: ApiService,
     private val contactDao: ContactDao,
+    private val conversationDao: ConversationDao,
+    private val messageDao: MessageDao,
     private val sessionResetSender: SessionResetSender,
 ) : IdentityRepository {
 
@@ -285,11 +291,31 @@ class IdentityRepositoryImpl @Inject constructor(
         (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
             ?.clearAllSessions()
 
-        // Notify all contacts that our keys rotated so they can re-establish.
+        // Record key-change events and notify all contacts.
         // Best-effort — don't fail rotation if a notification can't be delivered.
+        val localUserId = keyManager.getUserId() ?: ""
+        val now = Clock.System.now().toEpochMilliseconds()
         try {
             val contacts = contactDao.getAll().first()
             for (contact in contacts) {
+                // Insert a key-change event into each conversation
+                val conversation = conversationDao.getByContactId(contact.userId)
+                if (conversation != null) {
+                    messageDao.insert(MessageEntity(
+                        id = "keychange-local-${contact.userId}-$now",
+                        conversationId = conversation.id,
+                        senderId = localUserId,
+                        recipientId = contact.userId,
+                        encryptedBody = ByteArray(0),
+                        nonce = ByteArray(0),
+                        plaintext = "",
+                        state = MessageState.KEY_ROTATED_LOCAL.name,
+                        timestamp = now,
+                        expiresAt = null,
+                        isOutgoing = true,
+                    ))
+                }
+
                 try {
                     sessionResetSender.send(contact.userId)
                 } catch (_: Exception) { /* best effort */ }

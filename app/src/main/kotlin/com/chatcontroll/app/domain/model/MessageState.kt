@@ -17,13 +17,20 @@ enum class MessageState {
     /** Incoming voice call that was answered (plaintext = duration in seconds). */
     CALL_INCOMING,
     /** Missed incoming voice call (not answered, rejected, or unavailable). */
-    CALL_MISSED;
+    CALL_MISSED,
+    /** Local user rotated their identity keys. */
+    KEY_ROTATED_LOCAL,
+    /** Remote peer rotated their identity keys (session_reset received). */
+    KEY_ROTATED_REMOTE;
 
     val isTerminal: Boolean
         get() = this == DELIVERED || this == SEEN || this == FAILED || this == DECRYPT_FAILED || this == REJECTED
-                || isCallEvent
+                || isCallEvent || isKeyChangeEvent
 
     val isCallEvent: Boolean
         get() = this == CALL_OUTGOING || this == CALL_OUTGOING_MISSED
                 || this == CALL_INCOMING || this == CALL_MISSED
+
+    val isKeyChangeEvent: Boolean
+        get() = this == KEY_ROTATED_LOCAL || this == KEY_ROTATED_REMOTE
 }

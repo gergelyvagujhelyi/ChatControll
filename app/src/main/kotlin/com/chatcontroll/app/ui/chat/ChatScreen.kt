@@ -52,6 +52,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.ui.components.CallEventItem
+import com.chatcontroll.app.ui.components.KeyChangeEventItem
 import com.chatcontroll.app.ui.components.MessageBubble
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -174,7 +175,13 @@ fun ChatScreen(
                         .toLocalDateTime(TimeZone.currentSystemDefault())
                     val timeStr = "%02d:%02d".format(time.hour, time.minute)
 
-                    if (message.state.isCallEvent) {
+                    if (message.state.isKeyChangeEvent) {
+                        KeyChangeEventItem(
+                            state = message.state,
+                            timestamp = timeStr,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    } else if (message.state.isCallEvent) {
                         val duration = message.plaintext.toLongOrNull() ?: 0L
                         CallEventItem(
                             state = message.state,
@@ -227,7 +234,7 @@ fun ChatScreen(
                         }
                     } else {
                         Text(
-                            text = "Peer rotated keys. Tap to re-establish session.",
+                            text = "Peer rotated keys. Tap to resume sending.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
@@ -248,7 +255,7 @@ fun ChatScreen(
                     modifier = Modifier.weight(1f),
                     enabled = !needsSessionReset,
                     placeholder = {
-                        Text(if (needsSessionReset) "Session expired" else "Message")
+                        Text(if (needsSessionReset) "Tap banner to resume sending" else "Message")
                     },
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,
