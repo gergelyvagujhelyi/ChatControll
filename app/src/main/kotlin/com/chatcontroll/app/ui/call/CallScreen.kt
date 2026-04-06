@@ -278,26 +278,10 @@ fun CallScreen(
                     }
                 }
             }
-            callState?.status in setOf(
-                CallStatus.ENDED, CallStatus.FAILED, CallStatus.NO_RELAY,
-                CallStatus.REJECTED, CallStatus.BUSY, CallStatus.UNAVAILABLE,
-            ) -> {
-                // Terminal state: dismiss immediately
-                FilledIconButton(
-                    onClick = onCallEnded,
-                    modifier = Modifier.size(72.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                    ),
-                ) {
-                    Icon(Icons.Default.CallEnd, contentDescription = "Dismiss", modifier = Modifier.size(32.dp))
-                }
-            }
             else -> {
-                // Ringing outgoing or connecting: cancel the call
+                // Non-active state: hangup (no-op if terminal) + dismiss
                 FilledIconButton(
-                    onClick = viewModel::hangup,
+                    onClick = { viewModel.hangup(); onCallEnded() },
                     modifier = Modifier.size(72.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(

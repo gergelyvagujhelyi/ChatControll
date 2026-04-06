@@ -96,7 +96,9 @@ fun ChatNavGraph(
                     }
                 },
                 onCallClick = { contactId, displayName ->
-                    navController.navigate(Routes.call(contactId, displayName))
+                    navController.navigate(Routes.call(contactId, displayName)) {
+                        launchSingleTop = true
+                    }
                 },
             )
         }

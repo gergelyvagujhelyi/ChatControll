@@ -374,12 +374,14 @@ class CallManager @Inject constructor(
 
     fun hangup() {
         val state = _callState.value ?: return
+        if (state.status in TERMINAL_STATUSES) return
         endCall(CallStatus.ENDED)
         scope.launch {
             val result = sendSignal(state.peerId, "call_hangup", state.callId, "")
             if (result != true) logWarn("Hangup signal not delivered — peer may not know call ended")
         }
     }
+
 
     fun toggleMute() {
         val state = _callState.value ?: return
@@ -1084,6 +1086,10 @@ class CallManager @Inject constructor(
         private const val RINGING_TIMEOUT_MS = 35_000L
         /** Callee ringing timeout — longer than caller's so caller hangup arrives first. */
         private const val CALLEE_RINGING_TIMEOUT_MS = 45_000L
+        private val TERMINAL_STATUSES = setOf(
+            CallStatus.ENDED, CallStatus.FAILED, CallStatus.NO_RELAY,
+            CallStatus.REJECTED, CallStatus.BUSY, CallStatus.UNAVAILABLE,
+        )
     }
 }
 
