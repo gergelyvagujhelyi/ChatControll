@@ -39,7 +39,10 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
 _MAX_CALL_OFFERS_PER_MINUTE = 10
 _MAX_SIGNALS_PER_MINUTE = 100
 
-# Per-user rate limit state shared across all WebSocket connections
+# Per-user rate limit state shared across all WebSocket connections.
+# Protected by _ws_rate_lock to prevent interleaved read-modify-write
+# across concurrent WebSocket handlers.
+_ws_rate_lock = asyncio.Lock()
 _ws_signal_times: dict[str, list[float]] = defaultdict(list)
 _ws_call_offer_times: dict[str, list[float]] = defaultdict(list)
 
@@ -172,35 +175,38 @@ async def websocket_endpoint(
                     )
                     continue
 
-                # Per-user signal rate limit (shared across all connections)
-                now_sig = time.monotonic()
-                # Periodically prune stale entries (idle > 5 min)
-                if len(_ws_signal_times) > 1000:
-                    stale = [uid for uid, ts in _ws_signal_times.items()
-                             if not ts or (now_sig - ts[-1]) > 300]
-                    for uid in stale:
-                        _ws_signal_times.pop(uid, None)
-                        _ws_call_offer_times.pop(uid, None)
-                sig_times = _ws_signal_times[user_id]
-                sig_times[:] = [t for t in sig_times if now_sig - t < 60]
-                if len(sig_times) >= _MAX_SIGNALS_PER_MINUTE:
+                # Per-user signal rate limit (shared across all connections).
+                # Check-and-update under lock; send error response outside.
+                rate_limited = False
+                async with _ws_rate_lock:
+                    now_sig = time.monotonic()
+                    # Periodically prune stale entries (idle > 5 min)
+                    if len(_ws_signal_times) > 1000:
+                        stale = [uid for uid, ts in _ws_signal_times.items()
+                                 if not ts or (now_sig - ts[-1]) > 300]
+                        for uid in stale:
+                            _ws_signal_times.pop(uid, None)
+                            _ws_call_offer_times.pop(uid, None)
+                    sig_times = _ws_signal_times[user_id]
+                    sig_times[:] = [t for t in sig_times if now_sig - t < 60]
+                    if len(sig_times) >= _MAX_SIGNALS_PER_MINUTE:
+                        rate_limited = True
+                    else:
+                        sig_times.append(now_sig)
+                        # Per-user call_offer rate limit
+                        if msg_type == "call_offer":
+                            offer_times = _ws_call_offer_times[user_id]
+                            offer_times[:] = [t for t in offer_times if now_sig - t < 60]
+                            if len(offer_times) >= _MAX_CALL_OFFERS_PER_MINUTE:
+                                rate_limited = True
+                            else:
+                                offer_times.append(now_sig)
+
+                if rate_limited:
                     await websocket.send_text(
                         json.dumps({"type": "error", "message": "Rate limit exceeded"})
                     )
                     continue
-                sig_times.append(now_sig)
-
-                # Per-user call_offer rate limit
-                if msg_type == "call_offer":
-                    now = time.monotonic()
-                    offer_times = _ws_call_offer_times[user_id]
-                    offer_times[:] = [t for t in offer_times if now - t < 60]
-                    if len(offer_times) >= _MAX_CALL_OFFERS_PER_MINUTE:
-                        await websocket.send_text(
-                            json.dumps({"type": "error", "message": "Rate limit exceeded"})
-                        )
-                        continue
-                    offer_times.append(now)
 
                 await ws_manager.relay_call_signal(
                     sender_id=user_id,
@@ -220,5 +226,6 @@ async def websocket_endpoint(
             await ws_manager.disconnect(user_id, websocket)
             # Clean up rate limit entries if user has no more connections
             if not ws_manager.is_online(user_id):
-                _ws_signal_times.pop(user_id, None)
-                _ws_call_offer_times.pop(user_id, None)
+                async with _ws_rate_lock:
+                    _ws_signal_times.pop(user_id, None)
+                    _ws_call_offer_times.pop(user_id, None)

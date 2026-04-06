@@ -201,10 +201,9 @@ class CallManager @Inject constructor(
 
                 // Reject replayed signals (same signature = same signal)
                 val now = System.currentTimeMillis()
-                val iter = seenSignalSignatures.iterator()
-                while (iter.hasNext()) {
-                    if (now - iter.next().value > SIGNATURE_TTL_MS) iter.remove() else break
-                }
+                // Evict all expired entries — do not break early because
+                // capacity-based eviction can disrupt chronological order.
+                seenSignalSignatures.entries.removeAll { now - it.value > SIGNATURE_TTL_MS }
                 if (seenSignalSignatures.containsKey(signal.signature)) {
                     logDebug("Rejecting replayed call signal")
                     return@launch
