@@ -7,6 +7,7 @@ data class BootstrapRequest(
     val publicSigningKey: String,
     val publicIdentityKey: String,
     val pqcEncapsulationKey: String,
+    val pqcSigningKey: String = "",
     val fcmToken: String? = null,
 )
 
@@ -22,6 +23,7 @@ data class KeyBundleDto(
     val publicSigningKey: String,
     val publicIdentityKey: String,
     val pqcEncapsulationKey: String,
+    val pqcSigningKey: String = "",
 )
 
 @Serializable
@@ -67,6 +69,7 @@ data class ResolveShareCodeResponse(
     val publicSigningKey: String,
     val publicIdentityKey: String,
     val pqcEncapsulationKey: String,
+    val pqcSigningKey: String = "",
 )
 
 @Serializable
@@ -82,6 +85,7 @@ data class CallSignalRequest(
     val callId: String,
     val encryptedPayload: String,
     val signature: String = "",
+    val pqcSignature: String = "",
     val kemCiphertext: String = "",
 )
 
@@ -97,6 +101,7 @@ data class CallSignalDto(
     val callId: String,
     val encryptedPayload: String,
     val signature: String = "",
+    val pqcSignature: String = "",
     val kemCiphertext: String = "",
 )
 
@@ -117,6 +122,7 @@ data class KeyRotationRequest(
     val publicSigningKey: String,
     val publicIdentityKey: String,
     val pqcEncapsulationKey: String? = null,
+    val pqcSigningKey: String? = null,
     val newKeyProof: String,
 )
 

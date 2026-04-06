@@ -9,7 +9,6 @@ import android.util.Log
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.PqcProvider
-import com.chatcontroll.app.crypto.hkdfSha256
 import com.chatcontroll.app.crypto.lengthPrefixed
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
@@ -184,6 +183,21 @@ class CallManager @Inject constructor(
                 if (!valid) {
                     logWarn("Call signal signature verification failed for ${signal.senderId.take(8)}")
                     return@launch
+                }
+                // ML-DSA-65 post-quantum signature verification
+                if (signal.pqcSignature.isNotEmpty() && contact.pqcSigningKey.isNotEmpty()) {
+                    try {
+                        val pqcSig = Base64.decode(signal.pqcSignature, Base64.NO_WRAP)
+                        val pqcValid = pqcProvider.verify(sigPayload, pqcSig, contact.pqcSigningKey)
+                        if (!pqcValid) {
+                            logWarn("ML-DSA signature verification failed for ${signal.senderId.take(8)}")
+                            return@launch
+                        }
+                        logDebug("ML-DSA signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
+                    } catch (e: Exception) {
+                        logWarn("ML-DSA verification error for ${signal.senderId.take(8)}: ${e.message}")
+                        return@launch
+                    }
                 }
                 logDebug("Signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
                 verifiedContact = contact
@@ -752,6 +766,20 @@ class CallManager @Inject constructor(
             lengthPrefixed(callId.toByteArray(Charsets.UTF_8)) +
             encrypted.toByteArray(Charsets.UTF_8)
         val signature = Base64.encodeToString(keyManager.sign(sigPayload), Base64.NO_WRAP)
+        // ML-DSA-65 post-quantum signature (if local keys are available)
+        val pqcSig = try {
+            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    Base64.encodeToString(pqcProvider.sign(sigPayload, mlDsaPrivKey), Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (e: Exception) {
+            logWarn("ML-DSA signing failed, sending without PQC signature: ${e.message}")
+            ""
+        }
         // Attach KEM ciphertext to the call_offer (initiator → responder)
         val kemCt = if (signalType == "call_offer") {
             _pendingOutboundKemCiphertext.also { _pendingOutboundKemCiphertext = null } ?: ""
@@ -762,6 +790,7 @@ class CallManager @Inject constructor(
             callId = callId,
             encryptedPayload = encrypted,
             signature = signature,
+            pqcSignature = pqcSig,
             kemCiphertext = kemCt,
         )
         repeat(SIGNAL_SEND_RETRIES) { attempt ->
@@ -792,11 +821,15 @@ class CallManager @Inject constructor(
             val bundle = apiService.fetchKeyBundle(userId) ?: return null
             val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
             val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+            val pqcSignKey = if (bundle.pqcSigningKey.isNotEmpty()) {
+                Base64.decode(bundle.pqcSigningKey, Base64.NO_WRAP)
+            } else ByteArray(0)
             com.chatcontroll.app.data.local.entity.ContactEntity(
                 userId = userId,
                 displayName = userId.take(8),
                 publicIdentityKey = pubIdKey,
                 publicSigningKey = pubSignKey,
+                pqcSigningKey = pqcSignKey,
             )
         } catch (e: Exception) {
             logError("Failed to fetch key bundle for ${userId.take(8)}", e)
@@ -861,23 +894,23 @@ class CallManager @Inject constructor(
 
         val isPqcEstablished = pqcSecret.isNotEmpty()
 
-        // Combine classical + PQC secrets via HKDF, then zeroize inputs
+        // Combine classical + PQC secrets via SHAKE-256 KDF, then zeroize inputs
         val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
         classicalSecret.fill(0)
         if (isPqcEstablished) pqcSecret.fill(0)
 
-        val sharedSecret = hkdfSha256(
+        val sharedSecret = shake256Kdf(
             ikm = ikm,
-            salt = "ChatControll-v1-ratchet-init".toByteArray(Charsets.UTF_8),
+            salt = "ChatControll-v1-call-init".toByteArray(Charsets.UTF_8),
             info = "hybrid-key-establishment".toByteArray(Charsets.UTF_8),
             length = 32,
         )
         ikm.fill(0)
 
         // Derive bidirectional chain keys
-        val chainMaterial = hkdfSha256(
+        val chainMaterial = shake256Kdf(
             ikm = sharedSecret,
-            salt = "ChatControll-v1-chains".toByteArray(Charsets.UTF_8),
+            salt = "ChatControll-v1-call-chains".toByteArray(Charsets.UTF_8),
             info = "bidirectional-chains".toByteArray(Charsets.UTF_8),
             length = 64,
         )
@@ -924,7 +957,7 @@ class CallManager @Inject constructor(
      * key does not expose signals from other calls.
      */
     private fun deriveCallKey(sessionKey: ByteArray, callId: String): ByteArray {
-        return hkdfSha256(
+        return shake256Kdf(
             ikm = sessionKey,
             salt = callId.toByteArray(Charsets.UTF_8),
             info = "ChatControll-call-signal".toByteArray(Charsets.UTF_8),
@@ -943,7 +976,7 @@ class CallManager @Inject constructor(
         val xored = ByteArray(size) { i ->
             (sessionKeys.sendKey[i].toInt() xor sessionKeys.receiveKey[i].toInt()).toByte()
         }
-        val key = hkdfSha256(
+        val key = shake256Kdf(
             ikm = xored,
             salt = callId.toByteArray(Charsets.UTF_8),
             info = "ChatControll-call-media".toByteArray(Charsets.UTF_8),
@@ -1042,6 +1075,23 @@ class CallManager @Inject constructor(
         /** Callee ringing timeout — longer than caller's so caller hangup arrives first. */
         private const val CALLEE_RINGING_TIMEOUT_MS = 45_000L
     }
+}
+
+/**
+ * SHAKE-256 based key derivation for call encryption.
+ *
+ * Uses the Keccak sponge construction (SHA-3 family) instead of HMAC-SHA-256
+ * so the entire post-quantum call path avoids SHA-2 dependencies.
+ * Input: SHAKE-256(salt || ikm || info) truncated to [length] bytes.
+ */
+private fun shake256Kdf(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
+    val digest = org.bouncycastle.crypto.digests.SHAKEDigest(256)
+    digest.update(salt, 0, salt.size)
+    digest.update(ikm, 0, ikm.size)
+    digest.update(info, 0, info.size)
+    val output = ByteArray(length)
+    digest.doFinal(output, 0, length)
+    return output
 }
 
 private fun ByteArray.toCallHex(): String = joinToString("") { "%02x".format(it) }

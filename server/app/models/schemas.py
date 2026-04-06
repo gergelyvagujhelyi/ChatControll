@@ -9,6 +9,7 @@ class BootstrapRequest(BaseModel):
     public_signing_key: str = Field(..., max_length=4096)
     public_identity_key: str = Field(..., max_length=4096)
     pqc_encapsulation_key: str = Field("", max_length=8192)
+    pqc_signing_key: str = Field("", max_length=8192)
     fcm_token: Optional[str] = Field(None, max_length=4096)
 
 
@@ -22,6 +23,7 @@ class KeyBundleResponse(BaseModel):
     public_signing_key: str
     public_identity_key: str
     pqc_encapsulation_key: str
+    pqc_signing_key: str
 
 
 class ResolveShareCodeResponse(BaseModel):
@@ -29,12 +31,14 @@ class ResolveShareCodeResponse(BaseModel):
     public_signing_key: str
     public_identity_key: str
     pqc_encapsulation_key: str
+    pqc_signing_key: str
 
 
 class KeyRotationRequest(BaseModel):
     public_signing_key: str = Field(..., max_length=4096)
     public_identity_key: str = Field(..., max_length=4096)
     pqc_encapsulation_key: Optional[str] = Field(None, max_length=8192)
+    pqc_signing_key: Optional[str] = Field(None, max_length=8192)
     new_key_proof: str = Field(..., max_length=512, description="Signature of the new public_signing_key by the new private key (proof of possession)")
 
 
@@ -86,6 +90,7 @@ class CallSignalRequest(BaseModel):
     call_id: str = Field(..., max_length=128)
     encrypted_payload: str = Field(..., max_length=65536)
     signature: str = Field("", max_length=512)
+    pqc_signature: str = Field("", max_length=4608)  # ML-DSA-65 signature (~4412 B base64)
     kem_ciphertext: str = Field("", max_length=2048)  # ML-KEM-768 ciphertext (~1452 B base64); only on call_offer
 
 

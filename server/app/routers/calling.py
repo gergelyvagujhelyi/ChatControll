@@ -77,6 +77,7 @@ async def relay_signal(
         call_id=request.call_id,
         encrypted_payload=request.encrypted_payload,
         signature=request.signature,
+        pqc_signature=request.pqc_signature,
         kem_ciphertext=request.kem_ciphertext,
     )
 

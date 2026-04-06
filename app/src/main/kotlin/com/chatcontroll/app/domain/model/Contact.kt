@@ -5,6 +5,7 @@ data class Contact(
     val displayName: String,
     val publicIdentityKey: ByteArray,
     val publicSigningKey: ByteArray,
+    val pqcSigningKey: ByteArray = ByteArray(0),
     val verified: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean {

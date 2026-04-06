@@ -99,12 +99,16 @@ class IdentityRepositoryImpl @Inject constructor(
         // Always regenerate PQC keys alongside classical keys to keep the
         // key bundle consistent — reusing orphaned PQC keys with new classical
         // keys would produce a mismatched bundle.
-        val pqcEk = if (keyType == KeyType.HYBRID_POST_QUANTUM) {
+        var pqcEk = ByteArray(0)
+        var pqcSigningKey = ByteArray(0)
+        if (keyType == KeyType.HYBRID_POST_QUANTUM) {
             val kemKeyPair = pqcProvider.generateKemKeyPair()
             keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
-            kemKeyPair.encapsulationKey
-        } else {
-            ByteArray(0)
+            pqcEk = kemKeyPair.encapsulationKey
+
+            val dsaKeyPair = pqcProvider.generateSigningKeyPair()
+            keyManager.storeMlDsaKeys(dsaKeyPair.publicKey, dsaKeyPair.privateKey)
+            pqcSigningKey = dsaKeyPair.publicKey
         }
 
         // Register with relay server
@@ -113,6 +117,7 @@ class IdentityRepositoryImpl @Inject constructor(
                 publicSigningKey = Base64.encodeToString(keyPair.publicSigningKey, Base64.NO_WRAP),
                 publicIdentityKey = Base64.encodeToString(keyPair.publicIdentityKey, Base64.NO_WRAP),
                 pqcEncapsulationKey = if (pqcEk.isNotEmpty()) Base64.encodeToString(pqcEk, Base64.NO_WRAP) else "",
+                pqcSigningKey = if (pqcSigningKey.isNotEmpty()) Base64.encodeToString(pqcSigningKey, Base64.NO_WRAP) else "",
             )
         )
 
@@ -145,11 +150,20 @@ class IdentityRepositoryImpl @Inject constructor(
             throw IllegalStateException("Malformed Base64 in signing key for ${resolved.userId.take(8)}", e)
         }
 
+        val pqcSignKey = if (resolved.pqcSigningKey.isNotEmpty()) {
+            try {
+                Base64.decode(resolved.pqcSigningKey, Base64.NO_WRAP)
+            } catch (e: IllegalArgumentException) {
+                ByteArray(0)
+            }
+        } else ByteArray(0)
+
         val contact = Contact(
             userId = resolved.userId,
             displayName = resolved.userId.take(8),
             publicIdentityKey = pubIdKey,
             publicSigningKey = pubSignKey,
+            pqcSigningKey = pqcSignKey,
         )
 
         // Store contact locally
@@ -159,6 +173,7 @@ class IdentityRepositoryImpl @Inject constructor(
                 displayName = contact.displayName,
                 publicIdentityKey = contact.publicIdentityKey,
                 publicSigningKey = contact.publicSigningKey,
+                pqcSigningKey = contact.pqcSigningKey,
             )
         )
 
@@ -194,6 +209,7 @@ class IdentityRepositoryImpl @Inject constructor(
                     displayName = contact.displayName,
                     publicIdentityKey = contact.publicIdentityKey,
                     publicSigningKey = contact.publicSigningKey,
+                    pqcSigningKey = contact.pqcSigningKey,
                     pqcEstablished = true,
                 )
             )
@@ -210,6 +226,7 @@ class IdentityRepositoryImpl @Inject constructor(
                     displayName = entity.displayName,
                     publicIdentityKey = entity.publicIdentityKey,
                     publicSigningKey = entity.publicSigningKey,
+                    pqcSigningKey = entity.pqcSigningKey,
                     verified = entity.verified,
                 )
             }
@@ -223,6 +240,7 @@ class IdentityRepositoryImpl @Inject constructor(
             displayName = entity.displayName,
             publicIdentityKey = entity.publicIdentityKey,
             publicSigningKey = entity.publicSigningKey,
+            pqcSigningKey = entity.pqcSigningKey,
             verified = entity.verified,
         )
     }
@@ -239,12 +257,20 @@ class IdentityRepositoryImpl @Inject constructor(
         val newPqcEk = if (hasPqc) {
             pqcProvider.generateKemKeyPair()
         } else null
+        val currentMlDsa = keyManager.getMlDsaPublicKey()
+        val hasMlDsa = currentMlDsa != null && currentMlDsa.isNotEmpty()
+        val newMlDsa = if (hasMlDsa) {
+            pqcProvider.generateSigningKeyPair()
+        } else null
 
         // Base64-encode the new public keys
         val newSignB64 = Base64.encodeToString(newKeyPair.publicSigningKey, Base64.NO_WRAP)
         val newIdB64 = Base64.encodeToString(newKeyPair.publicIdentityKey, Base64.NO_WRAP)
         val newPqcB64 = newPqcEk?.let {
             Base64.encodeToString(it.encapsulationKey, Base64.NO_WRAP)
+        }
+        val newMlDsaB64 = newMlDsa?.let {
+            Base64.encodeToString(it.publicKey, Base64.NO_WRAP)
         }
 
         // Proof of possession: sign the new public_signing_key B64 string
@@ -266,6 +292,9 @@ class IdentityRepositoryImpl @Inject constructor(
         if (newPqcEk != null) {
             keyManager.stagePqcKeys(newPqcEk.encapsulationKey, newPqcEk.decapsulationKey)
         }
+        if (newMlDsa != null) {
+            keyManager.storeMlDsaKeys(newMlDsa.publicKey, newMlDsa.privateKey)
+        }
 
         // Call server (authenticated with the CURRENT signing key via authToken)
         val response = try {
@@ -274,6 +303,7 @@ class IdentityRepositoryImpl @Inject constructor(
                     publicSigningKey = newSignB64,
                     publicIdentityKey = newIdB64,
                     pqcEncapsulationKey = newPqcB64,
+                    pqcSigningKey = newMlDsaB64,
                     newKeyProof = proofB64,
                 )
             )
@@ -341,11 +371,19 @@ class IdentityRepositoryImpl @Inject constructor(
         } catch (e: IllegalArgumentException) {
             throw IllegalStateException("Malformed Base64 in signing key bundle for ${userId.take(8)}", e)
         }
+        val pqcSignKey = if (bundle.pqcSigningKey.isNotEmpty()) {
+            try {
+                Base64.decode(bundle.pqcSigningKey, Base64.NO_WRAP)
+            } catch (e: IllegalArgumentException) {
+                ByteArray(0)
+            }
+        } else ByteArray(0)
         return Contact(
             userId = bundle.userId,
             displayName = bundle.userId.take(8),
             publicIdentityKey = pubIdKey,
             publicSigningKey = pubSignKey,
+            pqcSigningKey = pqcSignKey,
         )
     }
 

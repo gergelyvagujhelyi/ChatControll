@@ -149,6 +149,7 @@ class WebSocketManager:
         call_id: str,
         encrypted_payload: str,
         signature: str = "",
+        pqc_signature: str = "",
         kem_ciphertext: str = "",
     ) -> bool:
         """Relay an opaque encrypted call signal to the recipient.
@@ -165,6 +166,8 @@ class WebSocketManager:
             "encrypted_payload": encrypted_payload,
             "signature": signature,
         }
+        if pqc_signature:
+            msg["pqc_signature"] = pqc_signature
         if kem_ciphertext:
             msg["kem_ciphertext"] = kem_ciphertext
         payload = json.dumps(msg)

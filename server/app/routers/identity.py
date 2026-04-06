@@ -54,6 +54,7 @@ async def bootstrap_identity(
         public_signing_key=request.public_signing_key,
         public_identity_key=request.public_identity_key,
         pqc_encapsulation_key=request.pqc_encapsulation_key,
+        pqc_signing_key=request.pqc_signing_key,
         share_code=share_code,
         fcm_token=request.fcm_token,
     )
@@ -85,6 +86,7 @@ async def fetch_key_bundle(
         public_signing_key=identity.public_signing_key,
         public_identity_key=identity.public_identity_key,
         pqc_encapsulation_key=identity.pqc_encapsulation_key,
+        pqc_signing_key=identity.pqc_signing_key,
     )
 
 
@@ -110,6 +112,7 @@ async def resolve_share_code(
         public_signing_key=identity.public_signing_key,
         public_identity_key=identity.public_identity_key,
         pqc_encapsulation_key=identity.pqc_encapsulation_key,
+        pqc_signing_key=identity.pqc_signing_key,
     )
 
 
@@ -186,6 +189,8 @@ async def rotate_keys(
     identity.public_identity_key = request.public_identity_key
     if request.pqc_encapsulation_key is not None:
         identity.pqc_encapsulation_key = request.pqc_encapsulation_key
+    if request.pqc_signing_key is not None:
+        identity.pqc_signing_key = request.pqc_signing_key
 
     # Recompute share code from new identity key.
     # Collision is caught by IntegrityError on commit (if a unique constraint

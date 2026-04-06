@@ -65,6 +65,21 @@ class KeyManager @Inject constructor(
             .apply()
     }
 
+    fun storeMlDsaKeys(publicKey: ByteArray, privateKey: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(KEY_MLDSA_PUBLIC, publicKey.toHex())
+            .putString(KEY_MLDSA_PRIVATE, privateKey.toHex())
+            .apply()
+    }
+
+    fun getMlDsaPublicKey(): ByteArray? {
+        return encryptedPrefs.getString(KEY_MLDSA_PUBLIC, null)?.hexToBytes()
+    }
+
+    fun getMlDsaPrivateKey(): ByteArray? {
+        return encryptedPrefs.getString(KEY_MLDSA_PRIVATE, null)?.hexToBytes()
+    }
+
     fun getPqcEncapsulationKey(): ByteArray? {
         return encryptedPrefs.getString(KEY_PQC_ENCAPSULATION, null)?.hexToBytes()
     }
@@ -323,6 +338,8 @@ class KeyManager @Inject constructor(
         private const val KEY_SHARE_CODE = "share_code"
         private const val KEY_PQC_ENCAPSULATION = "pqc_ek"
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
+        private const val KEY_MLDSA_PUBLIC = "mldsa_pub"
+        private const val KEY_MLDSA_PRIVATE = "mldsa_priv"
         private const val KEY_CREATED_AT = "created_at"
         private const val PQC_PREFIX = "pqc_session_"
         private const val SESSION_PREFIX = "session_id_"

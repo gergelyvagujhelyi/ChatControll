@@ -157,6 +157,7 @@ async def websocket_endpoint(
                 call_id = msg.get("call_id", "")
                 encrypted_payload = msg.get("encrypted_payload", "")
                 signature = msg.get("signature", "")
+                pqc_signature = msg.get("pqc_signature", "")
                 kem_ciphertext = msg.get("kem_ciphertext", "")
 
                 # Validate types and lengths (match REST schema constraints)
@@ -165,6 +166,7 @@ async def websocket_endpoint(
                     or not isinstance(call_id, str)
                     or not isinstance(encrypted_payload, str)
                     or not isinstance(signature, str)
+                    or not isinstance(pqc_signature, str)
                     or not isinstance(kem_ciphertext, str)
                     or not recipient_id
                     or not call_id
@@ -172,6 +174,7 @@ async def websocket_endpoint(
                     or len(call_id) > 128
                     or len(encrypted_payload) > 65536
                     or len(signature) > 512
+                    or len(pqc_signature) > 4608
                     or len(kem_ciphertext) > 2048
                 ):
                     await websocket.send_text(
@@ -230,6 +233,7 @@ async def websocket_endpoint(
                     call_id=call_id,
                     encrypted_payload=encrypted_payload,
                     signature=signature,
+                    pqc_signature=pqc_signature,
                     kem_ciphertext=kem_ciphertext,
                 )
 

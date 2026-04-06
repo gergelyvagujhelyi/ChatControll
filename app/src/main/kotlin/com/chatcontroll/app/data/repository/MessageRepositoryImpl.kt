@@ -433,6 +433,13 @@ class MessageRepositoryImpl @Inject constructor(
                     return null
                 }
             } else ByteArray(0)
+            val pqcSignKey = if (bundle.pqcSigningKey.isNotEmpty()) {
+                try {
+                    Base64.decode(bundle.pqcSigningKey, Base64.NO_WRAP)
+                } catch (e: IllegalArgumentException) {
+                    ByteArray(0)
+                }
+            } else ByteArray(0)
 
             // Pass PQC key when:
             //  (a) decapsulating inbound KEM from a received message, OR
@@ -459,6 +466,7 @@ class MessageRepositoryImpl @Inject constructor(
                     displayName = remoteUserId.take(8),
                     publicIdentityKey = pubIdKey,
                     publicSigningKey = pubSignKey,
+                    pqcSigningKey = pqcSignKey,
                     pqcEstablished = sessionKeys.pqcEstablished,
                 ))
             } else {

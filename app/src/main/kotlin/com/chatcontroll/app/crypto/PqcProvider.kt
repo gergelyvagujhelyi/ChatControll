@@ -3,9 +3,8 @@ package com.chatcontroll.app.crypto
 /**
  * Abstraction for post-quantum cryptographic operations.
  *
- * Production implementation should use ML-KEM-768 (FIPS 203).
- * Swap this interface's implementation when a production-ready
- * Android ML-KEM library becomes available.
+ * KEM: ML-KEM-768 (FIPS 203) for key encapsulation.
+ * DSA: ML-DSA-65 (FIPS 204) for digital signatures.
  */
 interface PqcProvider {
 
@@ -17,6 +16,28 @@ interface PqcProvider {
 
     /** Decapsulate: recover sharedSecret from ciphertext using the decapsulation key. */
     fun decapsulate(ciphertext: ByteArray, decapsulationKey: ByteArray): ByteArray
+
+    /** Generate an ML-DSA-65 signing keypair. */
+    fun generateSigningKeyPair(): DsaKeyPair
+
+    /** Sign data with an ML-DSA-65 private key. */
+    fun sign(data: ByteArray, privateKey: ByteArray): ByteArray
+
+    /** Verify an ML-DSA-65 signature against a public key. */
+    fun verify(data: ByteArray, signature: ByteArray, publicKey: ByteArray): Boolean
+}
+
+data class DsaKeyPair(
+    val publicKey: ByteArray,
+    val privateKey: ByteArray,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is DsaKeyPair) return false
+        return publicKey.contentEquals(other.publicKey)
+    }
+
+    override fun hashCode(): Int = publicKey.contentHashCode()
 }
 
 data class KemKeyPair(

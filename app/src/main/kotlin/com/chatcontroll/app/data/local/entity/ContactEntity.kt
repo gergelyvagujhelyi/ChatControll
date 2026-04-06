@@ -9,6 +9,7 @@ data class ContactEntity(
     val displayName: String,
     val publicIdentityKey: ByteArray,
     val publicSigningKey: ByteArray,
+    val pqcSigningKey: ByteArray = ByteArray(0),
     val verified: Boolean = false,
     val pqcEstablished: Boolean = false,
     val signatureRequired: Boolean = true,

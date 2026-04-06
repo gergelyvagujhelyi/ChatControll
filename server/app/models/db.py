@@ -33,6 +33,7 @@ class Identity(Base):
     public_signing_key = Column(Text, nullable=False)
     public_identity_key = Column(Text, nullable=False)
     pqc_encapsulation_key = Column(Text, nullable=False, default="")
+    pqc_signing_key = Column(Text, nullable=False, default="")
     share_code = Column(String(24), unique=True, nullable=False, index=True)
     fcm_token = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
