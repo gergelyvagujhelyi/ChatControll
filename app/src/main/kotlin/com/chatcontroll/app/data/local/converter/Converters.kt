@@ -14,11 +14,12 @@ class Converters {
         return try {
             Base64.decode(value, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
-            // Corrupted data in the database is a serious integrity issue —
-            // throw so the caller can handle it rather than silently returning
-            // an empty array that would cause downstream decryption failures.
-            android.util.Log.e("Converters", "Corrupted Base64 in database column", e)
-            throw IllegalStateException("Corrupted Base64 data in database", e)
+            // Log at ERROR — corrupted DB data is a serious integrity issue.
+            // Return empty ByteArray rather than throwing, because Room
+            // TypeConverters propagate exceptions as app crashes. Corrupted
+            // rows are handled downstream (decrypt failures, tombstones).
+            android.util.Log.e("Converters", "Corrupted Base64 in database column — returning empty", e)
+            ByteArray(0)
         }
     }
 }

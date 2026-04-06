@@ -129,6 +129,7 @@ class RatchetSessionManager @Inject constructor(
         )
         val chainA = chainMaterial.copyOfRange(0, 32)
         val chainB = chainMaterial.copyOfRange(32, 64)
+        chainMaterial.fill(0)
 
         val dhKeyPair = DhKeyPair(
             publicKey = localIdentity.publicIdentityKey,

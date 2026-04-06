@@ -22,7 +22,7 @@ from fastapi import HTTPException, Request
 from app.config import TRUSTED_PROXIES
 
 _WORKER_COUNT = max(1, int(os.getenv("UVICORN_WORKERS", "1")))
-IP_RATE_LIMIT = int(os.getenv("IP_RATE_LIMIT", "30")) // _WORKER_COUNT or 1
+IP_RATE_LIMIT = max(1, int(os.getenv("IP_RATE_LIMIT", "30")) // _WORKER_COUNT)
 IP_RATE_WINDOW = 60  # seconds
 
 

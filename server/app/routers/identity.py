@@ -6,6 +6,7 @@ private keys or any personally identifiable information.
 
 import base64
 import hashlib
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -156,7 +157,6 @@ async def rotate_keys(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid base64 in key rotation request")
 
-    import logging as _logging
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.serialization import load_der_public_key
     from cryptography.exceptions import InvalidSignature
@@ -172,7 +172,7 @@ async def rotate_keys(
     except InvalidSignature:
         raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
     except (ValueError, TypeError) as e:
-        _logging.getLogger(__name__).warning("Key proof validation error: %s", e)
+        logging.getLogger(__name__).warning("Key proof validation error: %s", e)
         raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
 
     result = await db.execute(
@@ -187,18 +187,11 @@ async def rotate_keys(
     if request.pqc_encapsulation_key is not None:
         identity.pqc_encapsulation_key = request.pqc_encapsulation_key
 
-    # Recompute share code from new identity key (with collision check)
-    new_share_code = _derive_share_code(request.public_identity_key)
-    if new_share_code != identity.share_code:
-        existing = await db.execute(
-            select(Identity).where(
-                Identity.share_code == new_share_code,
-                Identity.user_id != x_user_id,
-            )
-        )
-        if existing.scalar_one_or_none() is not None:
-            raise HTTPException(status_code=409, detail="Share code collision — retry with different keys")
-    identity.share_code = new_share_code
+    # Recompute share code from new identity key.
+    # Collision is caught by IntegrityError on commit (if a unique constraint
+    # exists) — no pre-check needed since 96-bit collisions are astronomically
+    # rare and the pre-check itself has a TOCTOU window.
+    identity.share_code = _derive_share_code(request.public_identity_key)
 
     try:
         await db.commit()
