@@ -274,7 +274,7 @@ class CallManager @Inject constructor(
                             logDebug("Ignoring call_ringing: no matching active call")
                             return@launch
                         }
-                        if (state.direction == CallDirection.OUTGOING && state.status == CallStatus.CONNECTING) {
+                        if (state.direction == CallDirection.OUTGOING && state.status == CallStatus.CONNECTING && !remoteDescriptionSet) {
                             _callState.value = state.copy(status = CallStatus.RINGING)
                             logDebug("Peer confirmed ringing")
                         }
@@ -393,7 +393,6 @@ class CallManager @Inject constructor(
             if (result != true) logWarn("Hangup signal not delivered — peer may not know call ended")
         }
     }
-
 
     fun toggleMute() {
         val state = _callState.value ?: return
@@ -958,7 +957,7 @@ class CallManager @Inject constructor(
             // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
             val currentCall = _callState.value
             if (currentCall == null || currentCall.peerId != peerId ||
-                currentCall.status == CallStatus.ENDED || currentCall.status == CallStatus.FAILED
+                currentCall.status in TERMINAL_STATUSES
             ) {
                 sessionKeys.sendKey.fill(0)
                 sessionKeys.receiveKey.fill(0)
