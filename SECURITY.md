@@ -90,6 +90,21 @@ When a peer rotates their identity keys, the recipient's ratchet state becomes s
 4. The sender must manually tap "Re-establish session" in the chat UI, which fetches the peer's new key bundle, creates a fresh ratchet session, and unlocks sending.
 5. Deduplication prevents multiple `session_reset` signals to the same peer; the tracking is cleared when a successful decrypt from that peer occurs.
 
+### Account Deletion Protocol (v0.3.9+)
+When a user wipes all local data, the app notifies contacts and cleans up server-side state:
+1. An `account_deleted` control message (distinct from `session_reset`) is sent to every contact via the message pipeline.
+2. The server-side identity is deleted (`DELETE /v1/identity/me`) **before** local keys are wiped, so the auth token remains valid for the API call.
+3. If the server is unreachable, the user is prompted to retry or skip server deletion. Retrying preserves local keys until the server call succeeds.
+4. On the recipient side, the `account_deleted` control message sets a `peerDeleted` flag on the conversation. This permanently blocks sending and displays "Peer deleted their account" in the chat UI.
+5. Signature verification of the `account_deleted` message falls back to locally stored contact keys (from a prior verified session), since the sender's server-side identity may already be deleted by the time the message is processed.
+
+### Key Change Events in Chat History (v0.3.9+)
+Key rotation and account deletion events are recorded as messages in the local chat history:
+- **Local key rotation**: When you rotate your keys, a `KEY_ROTATED_LOCAL` event is inserted into each contact's conversation.
+- **Remote key rotation**: When a peer's `session_reset` control message is processed, a `KEY_ROTATED_REMOTE` event is recorded.
+- **Account deletion**: When a peer's `account_deleted` control message is processed, an `ACCOUNT_DELETED` event is recorded.
+These events are rendered as centered, non-interactive items with distinct icons, giving users a clear audit trail of key changes in each conversation.
+
 ### Device Loss = Identity Loss
 Since identity lives only on the device, losing the device means losing:
 - The identity (cannot prove you are the same user)
@@ -119,6 +134,13 @@ When a signed message or call signal arrives from an unknown sender, the client 
 ### Base64 Input Validation (v0.3.4+)
 All `Base64.decode` calls on externally-received data (key bundles, KEM ciphertext, message envelopes) are wrapped in try/catch. Malformed Base64 from the server or a peer is logged and rejected rather than crashing the app.
 
+### Call Media Encryption (v0.3.9+)
+Voice call media is end-to-end encrypted at the frame level using WebRTC's FrameCryptor API:
+- **Algorithm**: AES-GCM with HKDF-derived keys per sender/receiver.
+- **Key material**: Derived from the existing session keys established during the Double Ratchet handshake, so the TURN server and any network intermediary sees only encrypted audio frames.
+- **Implementation**: `WebRtcEngine.enableFrameEncryption(key)` creates separate sender and receiver `FrameCryptor` instances. Encryption state changes are surfaced via callback for UI feedback.
+- **Cleanup**: Frame cryptors are disposed alongside the peer connection to prevent key material leaks.
+
 ### Call Signal Reliability (v0.3.4–0.3.8)
 Call signaling has been progressively hardened:
 - **v0.3.4**: `rejectCall()` and `hangup()` send the signaling message before tearing down local call state, so the peer always receives reject/hangup.
@@ -140,7 +162,6 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] No cloud backup by default
 - [x] Lock screen notification previews hidden by default
 - [x] No telemetry or third-party trackers
-- [x] Certificate pinning with SPKI hashes
 - [x] ProGuard/R8 enabled for release builds
 - [x] Production ML-KEM-768 library (Bouncy Castle 1.79+)
 - [x] Double Ratchet for forward secrecy
@@ -161,6 +182,9 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] Base64 input validation on all externally-received key material
 - [x] Call signal reliability — FCM push fallback, server-side buffering, ringing timeout, delivery status check
 - [x] Session reset on key rotation — peers notified and blocked until re-keyed
+- [x] Account deletion protocol — contacts notified, server identity deleted, send permanently blocked
+- [x] Key change audit trail — rotation and deletion events visible in chat history
+- [x] Call frame encryption — AES-GCM via WebRTC FrameCryptor, HKDF-derived keys
 - [ ] Push proxy to break FCM linkability
 - [x] Key rotation protocol — `rotateIdentityKeys()` with crash-safe staged promotion
 - [ ] Automated key rotation schedule + old-key grace period
