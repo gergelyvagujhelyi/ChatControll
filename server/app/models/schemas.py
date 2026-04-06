@@ -41,7 +41,7 @@ class KeyRotationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     recipient_id: str = Field(..., max_length=64)
     encrypted_body: str = Field(..., max_length=262_144)  # 256 KB — sufficient for chat messages
-    nonce: str = Field(..., max_length=1024)  # Actual nonces are ~16-24 bytes base64
+    nonce: str = Field(..., max_length=4096)  # Carries ratchet header JSON; first PQC msg includes ML-KEM ciphertext (~1.6 KB)
     ephemeral_public_key: str = Field("", max_length=4096)
     signature: str = Field("", max_length=512)
 

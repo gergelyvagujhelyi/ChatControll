@@ -473,9 +473,15 @@ class CallManager @Inject constructor(
         // acceptCall() and handleIncomingSignal(). Launch a coroutine so we
         // can properly acquire the suspending Mutex instead of using tryLock,
         // which would race with signal handlers reading the field under lock.
+        // Snapshot the reference so a rapid back-to-back call that sets a NEW
+        // _pendingNewContact between now and when the coroutine runs is not
+        // accidentally clobbered.
+        val contactToClear = _pendingNewContact
         scope.launch {
             signalMutex.withLock {
-                _pendingNewContact = null
+                if (_pendingNewContact === contactToClear) {
+                    _pendingNewContact = null
+                }
             }
         }
         pendingIceCandidates.clear()
