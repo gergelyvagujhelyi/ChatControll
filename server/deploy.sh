@@ -8,7 +8,8 @@ LOCK="/tmp/chatcontroll-deploy.lock"
 exec 200>"$LOCK"
 flock -n 200 || { echo "$(date): Deploy already running, skipping"; exit 0; }
 
-cd "$(dirname "$0")"
+REPO_ROOT="$(dirname "$0")/.."
+cd "$REPO_ROOT"
 
 LAST_DEPLOY_FILE="/tmp/chatcontroll-last-deploy"
 git fetch origin develop --quiet
@@ -31,8 +32,8 @@ fi
 SERVER_CHANGES=$(git diff --name-only "$LOCAL" "$REMOTE" -- server/ 2>/dev/null || echo "unknown")
 if [ "$LOCAL" = "none" ] || [ -n "$SERVER_CHANGES" ]; then
     echo "$(date): Server changed ($LOCAL -> $REMOTE), deploying"
-    docker compose build server
-    docker compose up -d --force-recreate server
+    docker compose -f server/docker-compose.yml build server
+    docker compose -f server/docker-compose.yml up -d --force-recreate server
     docker image prune -f
     echo "$(date): Deploy complete"
 else
