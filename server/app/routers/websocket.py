@@ -99,6 +99,7 @@ async def websocket_endpoint(
         # Explicitly close the DB session after auth to release the connection
         # back to the pool. Without this, the session stays open for the entire
         # WebSocket lifetime (potentially hours), exhausting the pool.
+        # NOTE: db is unusable after this point — do not add DB operations below.
         await db.close()
         if pub_key_b64 is None:
             await websocket.send_text(
