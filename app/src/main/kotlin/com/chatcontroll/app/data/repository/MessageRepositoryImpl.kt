@@ -608,8 +608,8 @@ class MessageRepositoryImpl @Inject constructor(
         keyManager.clearSessionForPeer(contactId)
         if (oldSessionId != null) cryptoEngine.clearSession(oldSessionId)
 
-        // Fetch fresh key bundle and establish new session
-        val sessionKeys = tryEstablishSession(contactId)
+        // Fetch fresh key bundle and establish new session (with PQC if available)
+        val sessionKeys = tryEstablishSession(contactId, encapsulateIfAvailable = true)
             ?: throw IllegalStateException("Could not re-establish session with $contactId")
 
         // Clear the flag — sending is now allowed again
