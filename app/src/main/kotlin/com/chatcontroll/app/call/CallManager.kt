@@ -847,6 +847,18 @@ class CallManager @Inject constructor(
             pqcEstablished = false,
         )
 
+        // Guard: if endCall() ran while we were suspended (e.g. during
+        // fetchKeyBundle), the call is over and _callSessionKeys was already
+        // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
+        val currentCall = _callState.value
+        if (currentCall == null || currentCall.peerId != peerId ||
+            currentCall.status == CallStatus.ENDED || currentCall.status == CallStatus.FAILED
+        ) {
+            sessionKeys.sendKey.fill(0)
+            sessionKeys.receiveKey.fill(0)
+            throw IllegalStateException("Call ended while deriving session keys for $peerId")
+        }
+
         _callSessionKeys[peerId] = sessionKeys
         logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
         return sessionKeys
@@ -910,18 +922,26 @@ class CallManager @Inject constructor(
         if (encrypted.isEmpty()) return ""
         val sessionKeys = ensureSessionKeys(peerId)
         val callKey = deriveCallKey(sessionKeys.receiveKey, callId)
-        require(encrypted.contains('.')) { "Invalid encrypted payload format" }
-        val parts = encrypted.split('.', limit = 2)
-        val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
-        val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
         try {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
-            return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            require(encrypted.contains('.')) { "Invalid encrypted payload format" }
+            val parts = encrypted.split('.', limit = 2)
+            val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
+            val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
+            try {
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
+                val plaintext = cipher.doFinal(ciphertext)
+                try {
+                    return String(plaintext, Charsets.UTF_8)
+                } finally {
+                    plaintext.fill(0)
+                }
+            } finally {
+                nonce.fill(0)
+                ciphertext.fill(0)
+            }
         } finally {
             callKey.fill(0)
-            nonce.fill(0)
-            ciphertext.fill(0)
         }
     }
 

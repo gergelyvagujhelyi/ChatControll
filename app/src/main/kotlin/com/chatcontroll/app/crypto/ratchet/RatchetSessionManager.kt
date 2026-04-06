@@ -227,7 +227,10 @@ class RatchetSessionManager @Inject constructor(
             } catch (e: IllegalArgumentException) {
                 throw IllegalArgumentException("Invalid base64 in ratchet header publicKey", e)
             }
-            require(decodedPk.size == 32) { "Ratchet header publicKey must be 32 bytes (X25519), got ${decodedPk.size}" }
+            // X25519 public keys are X.509 SubjectPublicKeyInfo encoded (44 bytes),
+            // not raw 32-byte keys, because Bouncy Castle's KeyPairGenerator returns
+            // the standard JCA encoded form via Key.getEncoded().
+            require(decodedPk.size == 44) { "Ratchet header publicKey must be 44 bytes (X25519 X.509), got ${decodedPk.size}" }
 
             // Strip kemCiphertext for AAD: the ciphertext was sealed with the
             // original header (kemCiphertext=null) before it was attached.

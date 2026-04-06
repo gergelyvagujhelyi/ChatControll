@@ -143,6 +143,19 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun acceptMessageRequest() {
+        viewModelScope.launch {
+            conversationRepository.approveConversation(conversationId)
+        }
+    }
+
+    fun rejectMessageRequest(onRejected: () -> Unit) {
+        viewModelScope.launch {
+            conversationRepository.deleteConversation(conversationId)
+            onRejected()
+        }
+    }
+
     fun clearError() {
         _sendError.value = null
     }

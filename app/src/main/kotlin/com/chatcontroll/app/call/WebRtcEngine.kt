@@ -52,6 +52,7 @@ class WebRtcEngine(context: Context) {
             .createPeerConnectionFactory()
     }
 
+    @Synchronized
     fun createPeerConnection(iceServers: List<PeerConnection.IceServer> = DEFAULT_ICE_SERVERS) {
         val config = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -158,6 +159,7 @@ class WebRtcEngine(context: Context) {
      * Enable frame-level E2E encryption on all RTP sender/receiver tracks
      * using AES-GCM via the WebRTC FrameCryptor API.
      */
+    @Synchronized
     fun enableFrameEncryption(key: ByteArray) {
         val pc = peerConnection ?: return
 
