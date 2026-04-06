@@ -18,7 +18,6 @@ class FcmService : FirebaseMessagingService() {
 
     @Inject lateinit var pushTokenRepository: PushTokenRepository
     @Inject lateinit var messageRepository: MessageRepository
-    @Inject lateinit var notificationManager: ChatNotificationManager
     @Inject lateinit var webSocketClient: WebSocketClient
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -48,25 +47,13 @@ class FcmService : FirebaseMessagingService() {
         // Ensure WebSocket is connected so buffered call signals are delivered
         webSocketClient.ensureConnected()
 
-        val senderId = message.data["senderId"] ?: "Unknown"
-        val conversationId = message.data["conversationId"]
-
+        // Fetch pending messages — notifications are shown by
+        // MessageRepositoryImpl after decryption with actual content.
         scope.launch {
             try {
                 messageRepository.fetchPendingFromServer()
             } catch (_: Exception) {
-                // Best-effort sync — notification still shown below
-            }
-
-            try {
-                notificationManager.showMessageNotification(
-                    senderId = senderId,
-                    senderName = senderId.take(8),
-                    messageBody = "New encrypted message",
-                    conversationId = conversationId,
-                )
-            } catch (_: Exception) {
-                // Best-effort notification
+                // Best-effort sync
             }
         }
     }

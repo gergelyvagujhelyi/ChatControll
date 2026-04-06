@@ -20,6 +20,7 @@ import com.chatcontroll.app.domain.repository.EncryptedEnvelope
 import com.chatcontroll.app.domain.repository.MessageRepository
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
+import com.chatcontroll.app.notification.ChatNotificationManager
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +40,7 @@ class MessageRepositoryImpl @Inject constructor(
     private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
     private val sessionResetSender: SessionResetSender,
+    private val notificationManager: ChatNotificationManager,
 ) : MessageRepository {
 
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
@@ -330,13 +332,26 @@ class MessageRepositoryImpl @Inject constructor(
             messageDao.insert(entity)
             receivedIds.add(dto.messageId)
 
+            val isActive = conversationId == activeConversationId
             updateConversationPreview(
                 conversationId,
                 dto.senderId,
                 plaintextStr,
                 dto.timestamp,
-                incrementUnread = conversationId != activeConversationId,
+                incrementUnread = !isActive,
             )
+
+            // Show notification for messages outside the active conversation
+            if (!isActive) {
+                val senderName = contactDao.getByUserId(dto.senderId)?.displayName
+                    ?: dto.senderId.take(8)
+                notificationManager.showMessageNotification(
+                    senderId = dto.senderId,
+                    senderName = senderName,
+                    messageBody = plaintextStr,
+                    conversationId = conversationId,
+                )
+            }
         }
 
         if (receivedIds.isNotEmpty()) {
