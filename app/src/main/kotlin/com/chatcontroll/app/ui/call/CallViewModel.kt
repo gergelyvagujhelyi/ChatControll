@@ -16,6 +16,7 @@ class CallViewModel @Inject constructor(
 ) : ViewModel() {
 
     val callState: StateFlow<CallState?> = callManager.callState
+    val callError: StateFlow<String?> = callManager.callError
 
     private val pendingContactId: String = savedStateHandle["contactId"] ?: ""
     private val pendingDisplayName: String = savedStateHandle.get<String>("displayName")
@@ -43,4 +44,5 @@ class CallViewModel @Inject constructor(
     fun hangup() = callManager.hangup()
     fun toggleMute() = callManager.toggleMute()
     fun toggleSpeaker() = callManager.toggleSpeaker()
+    fun clearCallError() = callManager.clearCallError()
 }

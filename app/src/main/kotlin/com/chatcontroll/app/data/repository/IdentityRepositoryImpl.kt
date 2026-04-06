@@ -2,13 +2,18 @@ package com.chatcontroll.app.data.repository
 
 import android.util.Base64
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.SessionResetSender
 import com.chatcontroll.app.data.local.dao.ContactDao
+import com.chatcontroll.app.data.local.dao.ConversationDao
+import com.chatcontroll.app.data.local.dao.MessageDao
 import com.chatcontroll.app.data.local.entity.ContactEntity
+import com.chatcontroll.app.data.local.entity.MessageEntity
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.dto.BootstrapRequest
 import com.chatcontroll.app.data.remote.dto.KeyRotationRequest
 import com.chatcontroll.app.domain.model.Contact
 import com.chatcontroll.app.domain.model.Identity
+import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.domain.model.KeyType
 import com.chatcontroll.app.domain.repository.CryptoEngine
@@ -16,6 +21,7 @@ import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
@@ -29,6 +35,9 @@ class IdentityRepositoryImpl @Inject constructor(
     private val keyManager: KeyManager,
     private val apiService: ApiService,
     private val contactDao: ContactDao,
+    private val conversationDao: ConversationDao,
+    private val messageDao: MessageDao,
+    private val sessionResetSender: SessionResetSender,
 ) : IdentityRepository {
 
     override suspend fun hasIdentity(): Boolean = keyManager.hasIdentity()
@@ -76,8 +85,9 @@ class IdentityRepositoryImpl @Inject constructor(
     override suspend fun getOrCreateIdentity(keyType: KeyType): Identity {
         getIdentity()?.let { return it }
 
-        // Reuse keys from a previous failed attempt, or generate new ones
-        val keyPair = keyManager.loadIdentityKeyPair() ?: run {
+        // If keys exist but userId is missing, a previous bootstrap partially
+        // failed. Regenerate to avoid duplicate/ambiguous server registrations.
+        val keyPair = run {
             val kp = cryptoEngine.generateIdentity()
             keyManager.storeIdentityKeyPair(kp)
             kp
@@ -86,12 +96,13 @@ class IdentityRepositoryImpl @Inject constructor(
         // Generate PQC keys only if the user chose hybrid post-quantum.
         // If the user explicitly chose PQC, key generation MUST succeed —
         // silent fallback to classical would be a cryptographic downgrade.
+        // Always regenerate PQC keys alongside classical keys to keep the
+        // key bundle consistent — reusing orphaned PQC keys with new classical
+        // keys would produce a mismatched bundle.
         val pqcEk = if (keyType == KeyType.HYBRID_POST_QUANTUM) {
-            keyManager.getPqcEncapsulationKey() ?: run {
-                val kemKeyPair = pqcProvider.generateKemKeyPair()
-                keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
-                kemKeyPair.encapsulationKey
-            }
+            val kemKeyPair = pqcProvider.generateKemKeyPair()
+            keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
+            kemKeyPair.encapsulationKey
         } else {
             ByteArray(0)
         }
@@ -174,6 +185,19 @@ class IdentityRepositoryImpl @Inject constructor(
             ),
         )
         keyManager.cacheSessionKeys(contact.userId, sessionKeys)
+
+        // Sync the contact's PQC flag now that the session is established
+        if (sessionKeys.pqcEstablished) {
+            contactDao.upsert(
+                ContactEntity(
+                    userId = contact.userId,
+                    displayName = contact.displayName,
+                    publicIdentityKey = contact.publicIdentityKey,
+                    publicSigningKey = contact.publicSigningKey,
+                    pqcEstablished = true,
+                )
+            )
+        }
 
         return contact
     }
@@ -266,22 +290,62 @@ class IdentityRepositoryImpl @Inject constructor(
         keyManager.clearSessionCache()
         (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
             ?.clearAllSessions()
+
+        // Record key-change events and notify all contacts.
+        // Best-effort — don't fail rotation if a notification can't be delivered.
+        val localUserId = keyManager.getUserId() ?: ""
+        val now = Clock.System.now().toEpochMilliseconds()
+        try {
+            val contacts = contactDao.getAll().first()
+            for (contact in contacts) {
+                // Insert a key-change event into each conversation
+                val conversation = conversationDao.getByContactId(contact.userId)
+                if (conversation != null) {
+                    messageDao.insert(MessageEntity(
+                        id = "keychange-local-${contact.userId}-$now",
+                        conversationId = conversation.id,
+                        senderId = localUserId,
+                        recipientId = contact.userId,
+                        encryptedBody = ByteArray(0),
+                        nonce = ByteArray(0),
+                        plaintext = "",
+                        state = MessageState.KEY_ROTATED_LOCAL.name,
+                        timestamp = now,
+                        expiresAt = null,
+                        isOutgoing = true,
+                    ))
+                }
+
+                try {
+                    sessionResetSender.send(contact.userId)
+                } catch (_: Exception) { /* best effort */ }
+            }
+        } catch (_: Exception) { /* best effort */ }
     }
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {
         val bundle = apiService.fetchKeyBundle(userId) ?: return null
-        return try {
-            Contact(
-                userId = bundle.userId,
-                displayName = bundle.userId.take(8),
-                publicIdentityKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP),
-                publicSigningKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP),
-            )
+        val pubIdKey = try {
+            Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
-            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("IdentityRepo", "Malformed Base64 in key bundle for $userId", e)
-            null
+            throw IllegalStateException("Malformed Base64 in identity key bundle for ${userId.take(8)}", e)
         }
+        val pubSignKey = try {
+            Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalStateException("Malformed Base64 in signing key bundle for ${userId.take(8)}", e)
+        }
+        return Contact(
+            userId = bundle.userId,
+            displayName = bundle.userId.take(8),
+            publicIdentityKey = pubIdKey,
+            publicSigningKey = pubSignKey,
+        )
     }
 
     override fun isPqcSession(peerId: String): Boolean = keyManager.isPeerPqcEstablished(peerId)
+
+    override fun observePqcSession(peerId: String): Flow<Boolean> {
+        return contactDao.observeByUserId(peerId).map { it?.pqcEstablished == true }
+    }
 }

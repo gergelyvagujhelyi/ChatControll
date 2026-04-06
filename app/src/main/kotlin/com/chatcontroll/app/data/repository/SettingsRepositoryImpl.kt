@@ -7,9 +7,12 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.SessionResetSender
+import com.chatcontroll.app.crypto.SessionResetSender.Companion.CTRL_ACCOUNT_DELETED
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.dao.ConversationDao
 import com.chatcontroll.app.data.local.dao.MessageDao
+import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.domain.model.DisappearingDuration
 import com.chatcontroll.app.domain.model.LockScreenPreviewMode
@@ -17,6 +20,7 @@ import com.chatcontroll.app.domain.model.PrivacySettings
 import com.chatcontroll.app.domain.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -30,7 +34,9 @@ class SettingsRepositoryImpl @Inject constructor(
     private val conversationDao: ConversationDao,
     private val contactDao: ContactDao,
     private val keyManager: KeyManager,
+    private val apiService: ApiService,
     private val webSocketClient: WebSocketClient,
+    private val sessionResetSender: SessionResetSender,
 ) : SettingsRepository {
 
     override fun getPrivacySettings(): Flow<PrivacySettings> {
@@ -60,7 +66,37 @@ class SettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun wipeLocalData() {
-        // Disconnect WebSocket first to prevent access to wiped state
+        val senderId = keyManager.getUserId()
+        if (senderId != null) {
+            // Notify contacts — best-effort
+            try {
+                val contacts = contactDao.getAll().first()
+                for (contact in contacts) {
+                    try {
+                        sessionResetSender.send(contact.userId, SessionResetSender.CTRL_ACCOUNT_DELETED)
+                    } catch (_: Exception) { /* best effort */ }
+                }
+            } catch (_: Exception) { /* best effort */ }
+
+            // Delete server identity BEFORE wiping local keys.
+            // If this fails, keys are preserved so the user can retry.
+            apiService.deleteIdentity()
+        }
+
+        // Server identity deleted (or no identity) — wipe local state
+        wipeLocal()
+    }
+
+    override suspend fun retryServerDeletion() {
+        apiService.deleteIdentity()
+        wipeLocal()
+    }
+
+    override suspend fun wipeLocalOnly() {
+        wipeLocal()
+    }
+
+    private suspend fun wipeLocal() {
         webSocketClient.disconnect()
         messageDao.deleteAll()
         conversationDao.deleteAll()

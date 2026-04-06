@@ -1,5 +1,9 @@
 package com.chatcontroll.app.ui.chat
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,12 +43,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.chatcontroll.app.domain.model.MessageState
+import com.chatcontroll.app.ui.components.CallEventItem
+import com.chatcontroll.app.ui.components.KeyChangeEventItem
 import com.chatcontroll.app.ui.components.MessageBubble
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -61,11 +71,23 @@ fun ChatScreen(
     val composerText by viewModel.composerText.collectAsState()
     val sendError by viewModel.sendError.collectAsState()
     val isReEstablishing by viewModel.isReEstablishing.collectAsState()
-    val encryptionInfo = viewModel.encryptionInfo
+    val encryptionInfo by viewModel.encryptionInfo.collectAsState()
     val needsSessionReset = conversation?.needsSessionReset == true
+    val peerDeleted = conversation?.peerDeleted == true
 
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+
+    // Request mic permission before navigating to CallScreen for outgoing calls
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            onCallClick(viewModel.contactId, conversation?.contactDisplayName ?: "Unknown")
+        }
+    }
 
     // Auto-scroll to bottom on new messages
     LaunchedEffect(messages.size) {
@@ -87,7 +109,10 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (lifecycleOwner.lifecycle.currentState != Lifecycle.State.RESUMED) return@IconButton
+                        onBack()
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -118,7 +143,18 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onCallClick(viewModel.contactId, conversation?.contactDisplayName ?: "Unknown") }) {
+                    IconButton(onClick = {
+                        // Ignore taps during exit animation to prevent ghost-clicks
+                        // when the outgoing screen overlaps the incoming one.
+                        if (lifecycleOwner.lifecycle.currentState != Lifecycle.State.RESUMED) return@IconButton
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                            == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            onCallClick(viewModel.contactId, conversation?.contactDisplayName ?: "Unknown")
+                        } else {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }) {
                         Icon(
                             Icons.Default.Call,
                             contentDescription = "Voice call",
@@ -147,32 +183,61 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { message ->
                     val time = message.timestamp
                         .toLocalDateTime(TimeZone.currentSystemDefault())
-                    MessageBubble(
-                        text = when {
-                            message.state == MessageState.REJECTED -> "\u26D4 Message rejected (unsigned or unverifiable)"
-                            message.state == MessageState.DECRYPT_FAILED -> "\u26A0 Could not decrypt this message"
-                            message.plaintext.isEmpty() -> "..."
-                            else -> message.plaintext
-                        },
-                        timestamp = "%02d:%02d".format(time.hour, time.minute),
-                        isOutgoing = message.isOutgoing,
-                        state = message.state,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    )
+                    val timeStr = "%02d:%02d".format(time.hour, time.minute)
+
+                    if (message.state.isKeyChangeEvent) {
+                        KeyChangeEventItem(
+                            state = message.state,
+                            timestamp = timeStr,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    } else if (message.state.isCallEvent) {
+                        val duration = message.plaintext.toLongOrNull() ?: 0L
+                        CallEventItem(
+                            state = message.state,
+                            durationSeconds = duration,
+                            timestamp = timeStr,
+                            isOutgoing = message.isOutgoing,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    } else {
+                        MessageBubble(
+                            text = when {
+                                message.state == MessageState.REJECTED -> "\u26D4 Message rejected (unsigned or unverifiable)"
+                                message.state == MessageState.DECRYPT_FAILED -> "\u26A0 Could not decrypt this message"
+                                message.plaintext.isEmpty() -> "..."
+                                else -> message.plaintext
+                            },
+                            timestamp = timeStr,
+                            isOutgoing = message.isOutgoing,
+                            state = message.state,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
                 }
             }
 
-            // Session reset banner
+            // Session reset / account deleted banner
             if (needsSessionReset) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.errorContainer)
-                        .clickable(enabled = !isReEstablishing) { viewModel.reEstablishSession() }
+                        .then(
+                            if (!peerDeleted && !isReEstablishing)
+                                Modifier.clickable { viewModel.reEstablishSession() }
+                            else Modifier
+                        )
                         .padding(12.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (isReEstablishing) {
+                    if (peerDeleted) {
+                        Text(
+                            text = "This user has deleted their account.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    } else if (isReEstablishing) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -189,7 +254,7 @@ fun ChatScreen(
                         }
                     } else {
                         Text(
-                            text = "Peer rotated keys. Tap to re-establish session.",
+                            text = "Peer rotated keys. Tap to resume sending.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                         )
@@ -210,7 +275,11 @@ fun ChatScreen(
                     modifier = Modifier.weight(1f),
                     enabled = !needsSessionReset,
                     placeholder = {
-                        Text(if (needsSessionReset) "Session expired" else "Message")
+                        Text(
+                            if (peerDeleted) "User deleted their account"
+                            else if (needsSessionReset) "Tap banner to resume sending"
+                            else "Message"
+                        )
                     },
                     colors = TextFieldDefaults.colors(
                         focusedIndicatorColor = Color.Transparent,

@@ -40,6 +40,9 @@ class SettingsViewModel @Inject constructor(
     private val _wipeCompleted = MutableStateFlow(false)
     val wipeCompleted: StateFlow<Boolean> = _wipeCompleted.asStateFlow()
 
+    private val _wipeError = MutableStateFlow<String?>(null)
+    val wipeError: StateFlow<String?> = _wipeError.asStateFlow()
+
     private val _showRotateConfirmation = MutableStateFlow(false)
     val showRotateConfirmation: StateFlow<Boolean> = _showRotateConfirmation.asStateFlow()
 
@@ -109,10 +112,39 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun confirmWipe() {
+        _showWipeConfirmation.value = false
+        performWipe { settingsRepository.wipeLocalData() }
+    }
+
+    fun retryWipe() {
+        _wipeError.value = null
+        performWipe { settingsRepository.retryServerDeletion() }
+    }
+
+    fun forceWipeLocal() {
+        _wipeError.value = null
         viewModelScope.launch {
-            settingsRepository.wipeLocalData()
-            _showWipeConfirmation.value = false
+            settingsRepository.wipeLocalOnly()
             _wipeCompleted.value = true
+        }
+    }
+
+    fun dismissWipeError() {
+        _wipeError.value = null
+        _wipeCompleted.value = true
+    }
+
+    private fun performWipe(action: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                action()
+                _wipeCompleted.value = true
+            } catch (_: Exception) {
+                _wipeError.value = "We could not reach the server to delete your account. " +
+                    "Your contacts may still try to send you messages.\n\n" +
+                    "Please check your internet connection and tap Retry, " +
+                    "or tap Delete Anyway to continue without server notification."
+            }
         }
     }
 
@@ -136,10 +168,12 @@ class SettingsViewModel @Inject constructor(
                 val identity = identityRepository.getIdentity()
                 _shareCode.value = identity?.shareCode
             } catch (e: Exception) {
-                if (com.chatcontroll.app.BuildConfig.DEBUG) {
-                    android.util.Log.e("SettingsVM", "Key rotation failed", e)
+                android.util.Log.e("SettingsVM", "Key rotation failed", e)
+                _rotationError.value = when (e) {
+                    is java.io.IOException -> "Network error — check your connection and try again."
+                    is IllegalStateException -> "Key rotation failed — local key error."
+                    else -> "Key rotation failed. Please try again."
                 }
-                _rotationError.value = "Key rotation failed. Please try again."
             } finally {
                 _isRotatingKeys.value = false
             }

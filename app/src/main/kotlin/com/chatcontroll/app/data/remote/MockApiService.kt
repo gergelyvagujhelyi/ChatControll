@@ -116,6 +116,15 @@ class MockApiService @Inject constructor() : ApiService {
         return com.chatcontroll.app.data.remote.dto.IceServersResponse(iceServers = emptyList())
     }
 
+    override suspend fun deleteIdentity(): Unit = mutex.withLock {
+        val userId = currentUserId ?: return@withLock
+        keyBundles.remove(userId)
+        shareCodes.entries.removeAll { it.value == userId }
+        pendingMessages.remove(userId)
+        pushTokens.remove(userId)
+        currentUserId = null
+    }
+
     override suspend fun rotateKeys(request: com.chatcontroll.app.data.remote.dto.KeyRotationRequest): com.chatcontroll.app.data.remote.dto.KeyRotationResponse = mutex.withLock {
         val userId = currentUserId ?: throw IllegalStateException("Not bootstrapped")
         val newShareCode = deriveShareCode(request.publicIdentityKey)

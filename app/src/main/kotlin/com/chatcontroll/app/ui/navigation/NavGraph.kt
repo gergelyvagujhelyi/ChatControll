@@ -2,6 +2,11 @@ package com.chatcontroll.app.ui.navigation
 
 import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
@@ -35,9 +40,14 @@ fun ChatNavGraph(
     navController: NavHostController,
     startDestination: String,
 ) {
+    val animDuration = 150
     NavHost(
         navController = navController,
         startDestination = startDestination,
+        enterTransition = { slideInHorizontally(tween(animDuration)) { it / 4 } + fadeIn(tween(animDuration)) },
+        exitTransition = { slideOutHorizontally(tween(animDuration)) { -it / 4 } + fadeOut(tween(animDuration)) },
+        popEnterTransition = { slideInHorizontally(tween(animDuration)) { -it / 4 } + fadeIn(tween(animDuration)) },
+        popExitTransition = { slideOutHorizontally(tween(animDuration)) { it / 4 } + fadeOut(tween(animDuration)) },
     ) {
         composable(Routes.ONBOARDING) {
             OnboardingScreen(

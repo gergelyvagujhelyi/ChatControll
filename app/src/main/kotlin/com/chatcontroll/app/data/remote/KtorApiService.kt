@@ -192,4 +192,11 @@ class KtorApiService @Inject constructor(
         check(response.status.isSuccess()) { "Key rotation failed: ${response.status}" }
         return response.body()
     }
+
+    override suspend fun deleteIdentity() {
+        val response: HttpResponse = client.delete("/v1/identity/me") {
+            header("Authorization", "Bearer ${authToken()}")
+        }
+        check(response.status.isSuccess()) { "Identity deletion failed: ${response.status}" }
+    }
 }

@@ -50,8 +50,11 @@ class ChatControllApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
 
-        // Recover from interrupted key rotation before any identity access
-        appScope.launch { identityRepository.recoverFromInterruptedKeyRotation() }
+        // Recovery must complete before any identity access — block startup.
+        // This is fast (only promotes staged keys if a rotation was interrupted).
+        kotlinx.coroutines.runBlocking {
+            identityRepository.recoverFromInterruptedKeyRotation()
+        }
 
         scheduleSyncWorker()
 

@@ -7,4 +7,6 @@ interface SettingsRepository {
     fun getPrivacySettings(): Flow<PrivacySettings>
     suspend fun updatePrivacySettings(settings: PrivacySettings)
     suspend fun wipeLocalData()
+    suspend fun retryServerDeletion()
+    suspend fun wipeLocalOnly()
 }

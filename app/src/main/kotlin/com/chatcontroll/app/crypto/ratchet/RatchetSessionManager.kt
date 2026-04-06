@@ -169,12 +169,29 @@ class RatchetSessionManager @Inject constructor(
 
             val headerJson = json.encodeToString(finalHeader)
 
-            persistSession(sessionKeys.sessionId, state)
+            try {
+                persistSession(sessionKeys.sessionId, state)
+            } catch (e: Exception) {
+                // ratchet.encrypt() mutated state in-place. On persistence
+                // failure, rollback in-memory state to match disk — same
+                // pattern as decrypt.
+                val restored = loadPersistedSession(sessionKeys.sessionId)
+                if (restored != null) {
+                    sessions[sessionKeys.sessionId] = restored
+                } else {
+                    sessions.remove(sessionKeys.sessionId)
+                }
+                throw e
+            }
 
             EncryptedEnvelope(
                 ciphertext = ciphertext,
                 nonce = headerJson.toByteArray(Charsets.UTF_8),
-                ephemeralPublicKey = Base64.getDecoder().decode(finalHeader.publicKey),
+                ephemeralPublicKey = try {
+                    Base64.getDecoder().decode(finalHeader.publicKey)
+                } catch (e: IllegalArgumentException) {
+                    throw IllegalStateException("Corrupt ephemeral public key in ratchet header", e)
+                },
             )
         }
     }
@@ -234,6 +251,12 @@ class RatchetSessionManager @Inject constructor(
     override fun deriveShareCode(publicIdentityKey: ByteArray): String {
         val hash = MessageDigest.getInstance("SHA-256").digest(publicIdentityKey)
         return Base64.getUrlEncoder().encodeToString(hash.copyOfRange(0, 12))
+    }
+
+    override suspend fun clearSession(sessionId: String) {
+        sessionsMutex.withLock {
+            sessions.remove(sessionId)
+        }
     }
 
     /** Clear all in-memory and persisted ratchet sessions (e.g. after key rotation). */

@@ -114,6 +114,10 @@ async def websocket_endpoint(
             json.dumps({"type": "auth_ok"})
         )
 
+        # Flush pending call signals AFTER auth_ok so the client doesn't
+        # mistake a buffered signal for a failed auth response.
+        await ws_manager.flush_pending_signals(user_id, websocket)
+
         # Keep alive loop — idle connections are closed after timeout
         while True:
             try:

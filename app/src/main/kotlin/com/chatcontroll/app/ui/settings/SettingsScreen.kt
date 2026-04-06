@@ -52,9 +52,29 @@ fun SettingsScreen(
     val showRotateConfirmation by viewModel.showRotateConfirmation.collectAsState()
     val isRotatingKeys by viewModel.isRotatingKeys.collectAsState()
     val rotationError by viewModel.rotationError.collectAsState()
+    val wipeError by viewModel.wipeError.collectAsState()
 
+    // Navigate to onboarding after wipe — delay if there's a warning to show
     LaunchedEffect(wipeCompleted) {
-        if (wipeCompleted) onWiped()
+        if (wipeCompleted && wipeError == null) onWiped()
+    }
+
+    wipeError?.let { error ->
+        AlertDialog(
+            onDismissRequest = { /* must choose an action */ },
+            title = { Text("Server unreachable") },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.retryWipe() }) {
+                    Text("Retry")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.forceWipeLocal() }) {
+                    Text("Delete Anyway", color = MaterialTheme.colorScheme.error)
+                }
+            },
+        )
     }
 
     if (showRotateConfirmation) {

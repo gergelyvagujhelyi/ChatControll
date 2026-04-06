@@ -2,6 +2,8 @@ package com.chatcontroll.app.data.repository
 
 import android.util.Base64
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.SessionResetSender
+import com.chatcontroll.app.crypto.buildMessageSigPayload
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.dao.ConversationDao
 import com.chatcontroll.app.data.local.dao.MessageDao
@@ -23,7 +25,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
-import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -37,6 +38,7 @@ class MessageRepositoryImpl @Inject constructor(
     private val apiService: ApiService,
     private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
+    private val sessionResetSender: SessionResetSender,
 ) : MessageRepository {
 
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
@@ -44,10 +46,18 @@ class MessageRepositoryImpl @Inject constructor(
     private val headerJson = Json { ignoreUnknownKeys = true }
 
     /** Track consecutive decrypt failures per message to avoid infinite retry. */
-    private val decryptFailCounts = mutableMapOf<String, Int>()
+    private val decryptFailCounts = ConcurrentHashMap<String, Int>()
 
     /** Track peers already notified with session_reset to avoid duplicate signals. */
-    private val sessionResetSentTo = mutableSetOf<String>()
+    private val sessionResetSentTo: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** The conversation currently open on screen — skip unread increment for it. */
+    @Volatile
+    private var activeConversationId: String? = null
+
+    override fun setActiveConversation(conversationId: String?) {
+        activeConversationId = conversationId
+    }
 
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
@@ -87,7 +97,7 @@ class MessageRepositoryImpl @Inject constructor(
             peerMutex.withLock {
                 var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
                 if (sessionKeys == null) {
-                    sessionKeys = tryEstablishSession(recipientId)
+                    sessionKeys = tryEstablishSession(recipientId, encapsulateIfAvailable = true)
                         ?: throw IllegalStateException("No session established with $recipientId")
                 }
                 cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
@@ -100,10 +110,8 @@ class MessageRepositoryImpl @Inject constructor(
         // Update the stored message with the encrypted payload
         messageDao.updateEncryptedBody(messageId, envelope.ciphertext, envelope.nonce)
 
-        // Sign the envelope for recipient verification (length-prefixed to prevent ambiguity)
-        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(recipientId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(envelope.nonce) + envelope.ciphertext
+        // Sign the envelope for recipient verification
+        val sigPayload = buildMessageSigPayload(senderId, recipientId, envelope.nonce, envelope.ciphertext)
         val signature = keyManager.sign(sigPayload)
         val signatureB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
 
@@ -148,16 +156,14 @@ class MessageRepositoryImpl @Inject constructor(
             // Re-encrypt with current ratchet state instead of sending stale ciphertext
             var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
             if (sessionKeys == null) {
-                sessionKeys = tryEstablishSession(entity.recipientId)
+                sessionKeys = tryEstablishSession(entity.recipientId, encapsulateIfAvailable = true)
                     ?: throw IllegalStateException("No session for retry")
             }
 
             val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
             val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
-            val retrySigPayload = lengthPrefixed(retrySenderId.toByteArray(Charsets.UTF_8)) +
-                lengthPrefixed(entity.recipientId.toByteArray(Charsets.UTF_8)) +
-                lengthPrefixed(envelope.nonce) + envelope.ciphertext
+            val retrySigPayload = buildMessageSigPayload(retrySenderId, entity.recipientId, envelope.nonce, envelope.ciphertext)
             val retrySignature = keyManager.sign(retrySigPayload)
 
             val response = apiService.sendMessage(
@@ -249,9 +255,7 @@ class MessageRepositoryImpl @Inject constructor(
                     receivedIds.add(dto.messageId)
                     continue
                 }
-                val sigPayload = lengthPrefixed(dto.senderId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(envelope.nonce) + envelope.ciphertext
+                val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
                 val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
@@ -326,7 +330,7 @@ class MessageRepositoryImpl @Inject constructor(
                 dto.senderId,
                 plaintextStr,
                 dto.timestamp,
-                incrementUnread = true,
+                incrementUnread = conversationId != activeConversationId,
             )
         }
 
@@ -342,6 +346,7 @@ class MessageRepositoryImpl @Inject constructor(
     private suspend fun tryEstablishSession(
         remoteUserId: String,
         inboundKemCiphertext: ByteArray? = null,
+        encapsulateIfAvailable: Boolean = false,
     ): SessionKeys? {
         return try {
             val bundle = apiService.fetchKeyBundle(remoteUserId) ?: return null
@@ -368,15 +373,18 @@ class MessageRepositoryImpl @Inject constructor(
                 }
             } else ByteArray(0)
 
-            // Only pass PQC key when we have inbound KEM ciphertext to decapsulate.
-            // Without it, we would encapsulate and derive a hybrid root key that
-            // doesn't match the sender's existing session.
+            // Pass PQC key when:
+            //  (a) decapsulating inbound KEM from a received message, OR
+            //  (b) encapsulating for a NEW outgoing session (sender path).
+            // Do NOT encapsulate when receiving a classical-only message —
+            // that would create a hybrid root key that the sender never derived.
+            val usePqcKey = inboundKemCiphertext != null || encapsulateIfAvailable
             val sessionKeys = cryptoEngine.establishSession(
                 localIdentity = localKeyPair,
                 remotePublicBundle = PublicKeyBundle(
                     publicSigningKey = pubSignKey,
                     publicIdentityKey = pubIdKey,
-                    pqcEncapsulationKey = if (inboundKemCiphertext != null) pqcKey else ByteArray(0),
+                    pqcEncapsulationKey = if (usePqcKey) pqcKey else ByteArray(0),
                 ),
                 inboundKemCiphertext = inboundKemCiphertext,
             )
@@ -477,7 +485,7 @@ class MessageRepositoryImpl @Inject constructor(
             // Notify the sender that they need to re-establish their session
             if (senderId !in sessionResetSentTo) {
                 try {
-                    sendSessionResetSignal(senderId)
+                    sessionResetSender.send(senderId)
                     sessionResetSentTo.add(senderId)
                 } catch (e: Exception) {
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
@@ -512,31 +520,6 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     /**
-     * Send a session_reset control message to a peer whose messages we can't decrypt.
-     * Uses the existing message pipeline for guaranteed delivery (store-and-forward).
-     */
-    private suspend fun sendSessionResetSignal(recipientId: String) {
-        val senderId = keyManager.getUserId() ?: return
-        val controlPayload = """{"ctrl":"session_reset"}"""
-        val nonceBytes = controlPayload.toByteArray(Charsets.UTF_8)
-        val bodyBytes = ByteArray(0)
-
-        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(recipientId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(nonceBytes) + bodyBytes
-        val signature = keyManager.sign(sigPayload)
-
-        apiService.sendMessage(
-            SendMessageRequest(
-                recipientId = recipientId,
-                encryptedBody = Base64.encodeToString(bodyBytes, Base64.NO_WRAP),
-                nonce = Base64.encodeToString(nonceBytes, Base64.NO_WRAP),
-                signature = Base64.encodeToString(signature, Base64.NO_WRAP),
-            )
-        )
-    }
-
-    /**
      * Check if a pending message is a control message (e.g. session_reset).
      * Returns true if the message was handled and should be skipped.
      */
@@ -562,66 +545,98 @@ class MessageRepositoryImpl @Inject constructor(
                 ?.content
         } catch (_: Exception) { return false }
 
-        if (ctrl != "session_reset") return false
+        val isAccountDeleted = ctrl == "account_deleted"
+        if (ctrl != "session_reset" && !isAccountDeleted) return false
 
         // Verify signature using the sender's CURRENT key from the server
-        // (their locally stored key may be outdated after rotation)
+        // (their locally stored key may be outdated after rotation).
+        // For account_deleted the sender's identity may already be gone from
+        // the server, so fall back to the locally stored key.
         val bundle = try {
             apiService.fetchKeyBundle(dto.senderId)
         } catch (_: Exception) { null }
 
-        if (bundle != null && dto.signature.isNotEmpty()) {
-            val localUserId = keyManager.getUserId() ?: ""
-            val pubSignKey = try {
-                Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
-            } catch (_: Exception) { null }
-            val pubIdKey = try {
-                Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
-            } catch (_: Exception) { null }
+        val localUserId = keyManager.getUserId() ?: ""
 
-            if (pubSignKey != null) {
-                val sigPayload = lengthPrefixed(dto.senderId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(nonceBytes) + ByteArray(0)
-                val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
-                val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
-                if (!valid) {
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
-                        "session_reset signature invalid from ${dto.senderId.take(8)}")
-                    receivedIds.add(dto.messageId)
-                    return true
-                }
+        // Determine the signing key to verify against
+        val existingContact = contactDao.getByUserId(dto.senderId)
+        val pubSignKey = if (bundle != null) {
+            try { Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP) } catch (_: Exception) { null }
+        } else {
+            existingContact?.publicSigningKey
+        }
+        val pubIdKey = if (bundle != null) {
+            try { Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP) } catch (_: Exception) { null }
+        } else {
+            existingContact?.publicIdentityKey
+        }
 
-                // Update the contact's stored keys to the new ones
-                val existingContact = contactDao.getByUserId(dto.senderId)
-                if (existingContact != null && pubIdKey != null) {
-                    contactDao.upsert(existingContact.copy(
-                        publicSigningKey = pubSignKey,
-                        publicIdentityKey = pubIdKey,
-                    ))
-                }
+        if (pubSignKey != null && dto.signature.isNotEmpty()) {
+            val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
+            val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+            val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
+            if (!valid) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                    "$ctrl signature invalid from ${dto.senderId.take(8)}")
+                receivedIds.add(dto.messageId)
+                return true
+            }
+
+            if (!isAccountDeleted && existingContact != null && pubIdKey != null) {
+                // Update the contact's stored keys to the new ones.
+                // Reset pqcEstablished so the classical-only re-establish
+                // isn't rejected by the PQC downgrade guard.
+                contactDao.upsert(existingContact.copy(
+                    publicSigningKey = pubSignKey,
+                    publicIdentityKey = pubIdKey,
+                    pqcEstablished = false,
+                ))
             }
         }
 
-        // Clear stale session for this peer
+        // Clear stale session for this peer (both persisted and in-memory ratchet state)
+        val staleSessionId = keyManager.getCachedSessionKeys(dto.senderId)?.sessionId
         keyManager.clearSessionForPeer(dto.senderId)
+        if (staleSessionId != null) cryptoEngine.clearSession(staleSessionId)
 
         // Mark conversation as needing session re-establishment
         conversationDao.setNeedsSessionReset(dto.senderId, true)
+        if (isAccountDeleted) {
+            conversationDao.setPeerDeleted(dto.senderId, true)
+        }
+
+        // Record event in the chat history
+        val eventState = if (isAccountDeleted) MessageState.ACCOUNT_DELETED else MessageState.KEY_ROTATED_REMOTE
+        val conversationId = getOrCreateConversationId(dto.senderId)
+        messageDao.insert(MessageEntity(
+            id = "keychange-${dto.messageId}",
+            conversationId = conversationId,
+            senderId = dto.senderId,
+            recipientId = localUserId,
+            encryptedBody = ByteArray(0),
+            nonce = ByteArray(0),
+            plaintext = "",
+            state = eventState.name,
+            timestamp = kotlinx.datetime.Clock.System.now().toEpochMilliseconds(),
+            expiresAt = null,
+            isOutgoing = false,
+        ))
 
         if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.i("MessageRepo",
-            "Session reset received from ${dto.senderId.take(8)}, session cleared")
+            "$ctrl received from ${dto.senderId.take(8)}, session cleared")
 
         receivedIds.add(dto.messageId)
         return true
     }
 
     override suspend fun reEstablishSession(contactId: String) {
-        // Clear old session state
+        // Clear old session state (both persisted and in-memory ratchet state)
+        val oldSessionId = keyManager.getCachedSessionKeys(contactId)?.sessionId
         keyManager.clearSessionForPeer(contactId)
+        if (oldSessionId != null) cryptoEngine.clearSession(oldSessionId)
 
-        // Fetch fresh key bundle and establish new session
-        val sessionKeys = tryEstablishSession(contactId)
+        // Fetch fresh key bundle and establish new session (with PQC if available)
+        val sessionKeys = tryEstablishSession(contactId, encapsulateIfAvailable = true)
             ?: throw IllegalStateException("Could not re-establish session with $contactId")
 
         // Clear the flag — sending is now allowed again
@@ -660,11 +675,6 @@ class MessageRepositoryImpl @Inject constructor(
             )
         )
     }
-}
-
-/** Prepend 4-byte big-endian length prefix to prevent concatenation ambiguity in signature payloads. */
-private fun lengthPrefixed(data: ByteArray): ByteArray {
-    return ByteBuffer.allocate(4).putInt(data.size).array() + data
 }
 
 private fun MessageEntity.toDomain(localUserId: String): Message {

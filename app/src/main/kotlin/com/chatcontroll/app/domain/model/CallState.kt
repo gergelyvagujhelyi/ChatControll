@@ -29,4 +29,6 @@ data class CallState(
     val isSpeakerOn: Boolean = false,
     /** True when no TURN relay server is available (STUN-only fallback). */
     val relayUnavailable: Boolean = false,
+    /** True when the caller is not a known contact (fetched on demand). */
+    val isNewContact: Boolean = false,
 )

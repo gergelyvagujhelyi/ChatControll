@@ -76,6 +76,13 @@ object DatabaseModule {
         }
     }
 
+    /** v4→v5: add peerDeleted column to conversations for account deletion flow. */
+    private val MIGRATION_4_5 = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE conversations ADD COLUMN peerDeleted INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
     private fun buildDatabase(context: Context, factory: SupportOpenHelperFactory): AppDatabase {
         return Room.databaseBuilder(
             context,
@@ -83,7 +90,7 @@ object DatabaseModule {
             DB_NAME,
         )
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .fallbackToDestructiveMigration()
             .build()
     }

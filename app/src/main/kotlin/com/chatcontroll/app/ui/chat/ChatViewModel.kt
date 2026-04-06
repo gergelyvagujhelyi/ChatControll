@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -38,11 +39,18 @@ class ChatViewModel @Inject constructor(
         conversationRepository.getConversation(conversationId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val encryptionInfo: String = if (identityRepository.isPqcSession(contactId)) {
-        "ML-KEM-768 + X25519 + AES-256-GCM"
-    } else {
-        "X25519 + AES-256-GCM"
-    }
+    val encryptionInfo: StateFlow<String> =
+        identityRepository.observePqcSession(contactId)
+            .map { isPqc ->
+                if (isPqc) "ML-KEM-768 + X25519 + AES-256-GCM"
+                else "X25519 + AES-256-GCM"
+            }
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                if (identityRepository.isPqcSession(contactId)) "ML-KEM-768 + X25519 + AES-256-GCM"
+                else "X25519 + AES-256-GCM",
+            )
 
     private val _composerText = MutableStateFlow("")
     val composerText: StateFlow<String> = _composerText.asStateFlow()
@@ -54,6 +62,8 @@ class ChatViewModel @Inject constructor(
     val isReEstablishing: StateFlow<Boolean> = _isReEstablishing.asStateFlow()
 
     init {
+        // Mark this conversation as active so incoming messages don't bump unread
+        messageRepository.setActiveConversation(conversationId)
         // Clear unread badge when conversation is opened
         viewModelScope.launch {
             conversationRepository.clearUnread(conversationId)
@@ -70,6 +80,11 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    override fun onCleared() {
+        super.onCleared()
+        messageRepository.setActiveConversation(null)
+    }
+
     fun updateComposer(text: String) {
         _composerText.value = text
     }
@@ -77,8 +92,12 @@ class ChatViewModel @Inject constructor(
     fun send() {
         val text = _composerText.value.trim()
         if (text.isBlank()) return
+        if (conversation.value?.peerDeleted == true) {
+            _sendError.value = "This user has deleted their account."
+            return
+        }
         if (conversation.value?.needsSessionReset == true) {
-            _sendError.value = "Session expired. Tap \"Re-establish session\" first."
+            _sendError.value = "Peer rotated keys. Tap the banner above to resume sending."
             return
         }
         if (conversation.value?.isApproved == false) {
