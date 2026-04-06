@@ -59,6 +59,32 @@ class MessageRepositoryImpl @Inject constructor(
         activeConversationId = conversationId
     }
 
+    /**
+     * Evict unlocked peer mutexes and stale tracking entries when maps grow
+     * beyond [PRUNE_THRESHOLD] to prevent unbounded memory growth on
+     * long-lived installs.
+     */
+    private fun pruneInMemoryMaps() {
+        if (peerLocks.size > PRUNE_THRESHOLD) {
+            val toRemove = peerLocks.entries
+                .filter { !it.value.isLocked }
+                .map { it.key }
+            toRemove.forEach { peerLocks.remove(it) }
+        }
+        if (decryptFailCounts.size > PRUNE_THRESHOLD) {
+            // Evict entries with the highest retry counts first (closest to
+            // being tombstoned) to keep actively-retrying messages intact.
+            val evictCount = decryptFailCounts.size - PRUNE_THRESHOLD
+            decryptFailCounts.entries
+                .sortedByDescending { it.value }
+                .take(evictCount)
+                .forEach { decryptFailCounts.remove(it.key) }
+        }
+        if (sessionResetSentTo.size > PRUNE_THRESHOLD) {
+            sessionResetSentTo.clear()
+        }
+    }
+
     override fun getMessages(conversationId: String): Flow<List<Message>> {
         return messageDao.getMessagesForConversation(conversationId).map { entities ->
             entities.map { it.toDomain(keyManager.getUserId() ?: "") }
@@ -152,15 +178,17 @@ class MessageRepositoryImpl @Inject constructor(
         val plaintext = entity.plaintext ?: return // Cannot retry without plaintext
         messageDao.updateState(messageId, MessageState.SENDING.name)
 
+        // Serialize ratchet operations per peer — same lock used by sendMessage/fetch
+        val peerMutex = peerLocks.getOrPut(entity.recipientId) { kotlinx.coroutines.sync.Mutex() }
         try {
-            // Re-encrypt with current ratchet state instead of sending stale ciphertext
-            var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
-            if (sessionKeys == null) {
-                sessionKeys = tryEstablishSession(entity.recipientId, encapsulateIfAvailable = true)
-                    ?: throw IllegalStateException("No session for retry")
+            val envelope = peerMutex.withLock {
+                var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
+                if (sessionKeys == null) {
+                    sessionKeys = tryEstablishSession(entity.recipientId, encapsulateIfAvailable = true)
+                        ?: throw IllegalStateException("No session for retry")
+                }
+                cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
             }
-
-            val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
             val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
             val retrySigPayload = buildMessageSigPayload(retrySenderId, entity.recipientId, envelope.nonce, envelope.ciphertext)
@@ -199,6 +227,8 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     private suspend fun fetchPendingInternal() {
+        pruneInMemoryMaps()
+
         val pending = apiService.fetchPendingMessages()
         if (pending.isEmpty()) return
 
@@ -675,6 +705,9 @@ class MessageRepositoryImpl @Inject constructor(
         /** After this many failed decrypt attempts, acknowledge the message to
          *  prevent it from poisoning the pending queue forever. */
         private const val MAX_DECRYPT_RETRIES = 3
+
+        /** Evict stale entries from in-memory maps when they exceed this size. */
+        private const val PRUNE_THRESHOLD = 200
     }
 
     private suspend fun updateConversationPreview(
