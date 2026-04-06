@@ -45,6 +45,9 @@ _MAX_SIGNALS_PER_MINUTE = 100
 _ws_rate_lock = asyncio.Lock()
 _ws_signal_times: dict[str, list[float]] = defaultdict(list)
 _ws_call_offer_times: dict[str, list[float]] = defaultdict(list)
+_ws_rate_last_prune: float = 0.0
+_WS_RATE_HIGH_WATER = 2000
+_WS_RATE_PRUNE_INTERVAL = 60  # seconds between prune attempts
 
 
 @router.websocket("/v1/ws")
@@ -180,8 +183,12 @@ async def websocket_endpoint(
                 rate_limited = False
                 async with _ws_rate_lock:
                     now_sig = time.monotonic()
-                    # Periodically prune stale entries (idle > 5 min)
-                    if len(_ws_signal_times) > 1000:
+                    # Prune stale entries when high-water mark is hit,
+                    # but at most once per _WS_RATE_PRUNE_INTERVAL.
+                    global _ws_rate_last_prune
+                    if (len(_ws_signal_times) > _WS_RATE_HIGH_WATER
+                            and now_sig - _ws_rate_last_prune > _WS_RATE_PRUNE_INTERVAL):
+                        _ws_rate_last_prune = now_sig
                         stale = [uid for uid, ts in _ws_signal_times.items()
                                  if not ts or (now_sig - ts[-1]) > 300]
                         for uid in stale:
@@ -224,8 +231,5 @@ async def websocket_endpoint(
     finally:
         if user_id:
             await ws_manager.disconnect(user_id, websocket)
-            # Clean up rate limit entries if user has no more connections
-            if not ws_manager.is_online(user_id):
-                async with _ws_rate_lock:
-                    _ws_signal_times.pop(user_id, None)
-                    _ws_call_offer_times.pop(user_id, None)
+            # Rate limit state is preserved for the TTL duration even after disconnect
+            # to prevent quota reset via reconnect. Stale entries are pruned periodically.

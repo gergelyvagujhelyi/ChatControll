@@ -34,6 +34,9 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
 _MAX_SIGNALS_PER_MINUTE = 100
 _signal_lock = asyncio.Lock()
 _signal_times: dict[str, list[float]] = defaultdict(list)
+_signal_last_prune: float = 0.0
+_SIGNAL_HIGH_WATER = 2000
+_SIGNAL_PRUNE_INTERVAL = 60  # seconds between prune attempts
 
 
 @router.post("/signal", response_model=CallSignalResponse)
@@ -56,8 +59,12 @@ async def relay_signal(
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
         times.append(now)
 
-        # Periodically prune users with no recent signals to prevent memory leak
-        if len(_signal_times) > 1000:
+        # Prune stale entries when high-water mark is hit,
+        # but at most once per _SIGNAL_PRUNE_INTERVAL.
+        global _signal_last_prune
+        if (len(_signal_times) > _SIGNAL_HIGH_WATER
+                and now - _signal_last_prune > _SIGNAL_PRUNE_INTERVAL):
+            _signal_last_prune = now
             stale = [uid for uid, ts in _signal_times.items()
                      if not ts or (now - ts[-1]) > 300]
             for uid in stale:
