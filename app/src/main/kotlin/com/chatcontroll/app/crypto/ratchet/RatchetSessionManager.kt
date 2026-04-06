@@ -102,7 +102,10 @@ class RatchetSessionManager @Inject constructor(
         val isPqcEstablished = pqcSecret.isNotEmpty()
 
         // Combine classical + PQC secrets via HKDF, then zeroize inputs
-        val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret
+        // In the PQC path, `+` creates a new array so classicalSecret can be
+        // zeroized independently. In the classical-only path, copyOf() is needed
+        // to avoid aliasing — without it, classicalSecret.fill(0) zeroes ikm.
+        val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
         classicalSecret.fill(0)
         if (isPqcEstablished) pqcSecret.fill(0)
 
