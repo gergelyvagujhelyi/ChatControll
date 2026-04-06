@@ -110,7 +110,7 @@ class CallManager @Inject constructor(
             peerId = peerId,
             peerDisplayName = peerDisplayName,
             direction = CallDirection.OUTGOING,
-            status = CallStatus.RINGING,
+            status = CallStatus.CONNECTING,
         )
 
         scope.launch {
@@ -128,11 +128,13 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 if (result) {
+                    // Delivered via WebSocket — peer's phone is ringing
+                    _callState.update { it?.copy(status = CallStatus.RINGING) }
                     logDebug("call_offer delivered via WebSocket")
                 } else {
+                    // Buffered by server — stay in CONNECTING until peer comes online
                     logDebug("call_offer buffered by server — waiting for FCM to wake recipient")
                 }
-                // Start ringing timeout — if no answer within the limit, give up
                 startRingingTimeout(callId)
             } catch (e: Exception) {
                 logError("Failed to initiate call", e)
@@ -429,7 +431,7 @@ class CallManager @Inject constructor(
         ringingTimeoutJob = scope.launch {
             kotlinx.coroutines.delay(RINGING_TIMEOUT_MS)
             val state = _callState.value
-            if (state != null && state.callId == callId && state.status == CallStatus.RINGING) {
+            if (state != null && state.callId == callId && state.status in setOf(CallStatus.RINGING, CallStatus.CONNECTING)) {
                 logWarn("Ringing timeout — no answer after ${RINGING_TIMEOUT_MS / 1000}s")
                 sendSignal(state.peerId, "call_hangup", callId, "")
                 endCall(CallStatus.UNAVAILABLE)
