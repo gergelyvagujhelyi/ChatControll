@@ -102,6 +102,7 @@ class SettingsRepositoryImpl @Inject constructor(
         conversationDao.deleteAll()
         contactDao.deleteAll()
         keyManager.wipeAll()
+        context.deleteDatabase("chatcontroll.db")
         context.settingsDataStore.edit { it.clear() }
     }
 

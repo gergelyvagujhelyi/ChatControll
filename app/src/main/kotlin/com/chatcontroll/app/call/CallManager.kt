@@ -82,6 +82,7 @@ class CallManager @Inject constructor(
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
     private val signalMutex = kotlinx.coroutines.sync.Mutex()
+    private val sessionKeyMutex = kotlinx.coroutines.sync.Mutex()
     private var ringingTimeoutJob: Job? = null
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     @Volatile
@@ -854,101 +855,110 @@ class CallManager @Inject constructor(
         // Fast path: already derived for this peer during this call
         _callSessionKeys[peerId]?.let { return it }
 
-        val bundle = apiService.fetchKeyBundle(peerId)
-            ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
-        val remotePubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+        // Serialize key derivation — concurrent ICE candidate coroutines must not
+        // race through the KEM branch logic. Without this lock, a second racer
+        // finds _pendingInboundKemCiphertext already consumed (null), enters the
+        // encapsulate (initiator) branch, and derives different keys.
+        return sessionKeyMutex.withLock {
+            // Re-check inside lock — another coroutine may have derived while we waited
+            _callSessionKeys[peerId]?.let { return@withLock it }
 
-        val localKeyPair = keyManager.loadIdentityKeyPair()
-            ?: throw IllegalStateException("No local identity key pair")
+            val bundle = apiService.fetchKeyBundle(peerId)
+                ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
+            val remotePubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
 
-        // X25519 shared secret
-        val classicalSecret = classicalKeyAgreement.agree(
-            privateKey = localKeyPair.privateIdentityKey,
-            remotePublicKey = remotePubIdKey,
-        )
+            val localKeyPair = keyManager.loadIdentityKeyPair()
+                ?: throw IllegalStateException("No local identity key pair")
 
-        // Deterministic initiator role: same comparison as RatchetSessionManager
-        val isInitiator = localKeyPair.publicIdentityKey.toCallHex() < remotePubIdKey.toCallHex()
+            // X25519 shared secret
+            val classicalSecret = classicalKeyAgreement.agree(
+                privateKey = localKeyPair.privateIdentityKey,
+                remotePublicKey = remotePubIdKey,
+            )
 
-        // PQC KEM handshake — mirrors RatchetSessionManager.establishSession()
-        var pqcSecret = ByteArray(0)
-        val inboundKem = _pendingInboundKemCiphertext
-        _pendingInboundKemCiphertext = null
+            // Deterministic initiator role: same comparison as RatchetSessionManager
+            val isInitiator = localKeyPair.publicIdentityKey.toCallHex() < remotePubIdKey.toCallHex()
 
-        if (inboundKem != null) {
-            // Responder: decapsulate the KEM ciphertext from the call_offer
-            val decapsulationKey = keyManager.getPqcDecapsulationKey()
-                ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
-            try {
-                pqcSecret = pqcProvider.decapsulate(inboundKem, decapsulationKey)
-            } finally {
-                decapsulationKey.fill(0)
+            // PQC KEM handshake — mirrors RatchetSessionManager.establishSession()
+            var pqcSecret = ByteArray(0)
+            val inboundKem = _pendingInboundKemCiphertext
+            _pendingInboundKemCiphertext = null
+
+            if (inboundKem != null) {
+                // Responder: decapsulate the KEM ciphertext from the call_offer
+                val decapsulationKey = keyManager.getPqcDecapsulationKey()
+                    ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
+                try {
+                    pqcSecret = pqcProvider.decapsulate(inboundKem, decapsulationKey)
+                } finally {
+                    decapsulationKey.fill(0)
+                }
+            } else if (bundle.pqcEncapsulationKey.isNotEmpty()) {
+                // Initiator: encapsulate against peer's ML-KEM public key
+                val remotePqcKey = Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
+                val encapsulation = pqcProvider.encapsulate(remotePqcKey)
+                pqcSecret = encapsulation.sharedSecret
+                _pendingOutboundKemCiphertext = Base64.encodeToString(encapsulation.ciphertext, Base64.NO_WRAP)
             }
-        } else if (bundle.pqcEncapsulationKey.isNotEmpty()) {
-            // Initiator: encapsulate against peer's ML-KEM public key
-            val remotePqcKey = Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
-            val encapsulation = pqcProvider.encapsulate(remotePqcKey)
-            pqcSecret = encapsulation.sharedSecret
-            _pendingOutboundKemCiphertext = Base64.encodeToString(encapsulation.ciphertext, Base64.NO_WRAP)
+
+            val isPqcEstablished = pqcSecret.isNotEmpty()
+
+            // Combine classical + PQC secrets via SHAKE-256 KDF, then zeroize inputs
+            val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
+            classicalSecret.fill(0)
+            if (isPqcEstablished) pqcSecret.fill(0)
+
+            val sharedSecret = shake256Kdf(
+                ikm = ikm,
+                salt = "ChatControll-v1-call-init".toByteArray(Charsets.UTF_8),
+                info = "hybrid-key-establishment".toByteArray(Charsets.UTF_8),
+                length = 32,
+            )
+            ikm.fill(0)
+
+            // Derive bidirectional chain keys
+            val chainMaterial = shake256Kdf(
+                ikm = sharedSecret,
+                salt = "ChatControll-v1-call-chains".toByteArray(Charsets.UTF_8),
+                info = "bidirectional-chains".toByteArray(Charsets.UTF_8),
+                length = 64,
+            )
+            sharedSecret.fill(0)
+
+            val chainA = chainMaterial.copyOfRange(0, 32)
+            val chainB = chainMaterial.copyOfRange(32, 64)
+            chainMaterial.fill(0)
+
+            val sessionKeys = SessionKeys(
+                sendKey = if (isInitiator) chainA else chainB,
+                receiveKey = if (isInitiator) chainB else chainA,
+                sessionId = "call-$peerId",
+                pqcEstablished = isPqcEstablished,
+            )
+            if (isPqcEstablished) {
+                logDebug("PQC hybrid key agreement established for call with ${peerId.take(8)}")
+            }
+
+            // Guard: if endCall() ran while we were suspended (e.g. during
+            // fetchKeyBundle), the call is over and _callSessionKeys was already
+            // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
+            val currentCall = _callState.value
+            if (currentCall == null || currentCall.peerId != peerId ||
+                currentCall.status == CallStatus.ENDED || currentCall.status == CallStatus.FAILED
+            ) {
+                sessionKeys.sendKey.fill(0)
+                sessionKeys.receiveKey.fill(0)
+                throw IllegalStateException("Call ended while deriving session keys for $peerId")
+            }
+
+            _callSessionKeys[peerId] = sessionKeys
+            // Update CallState so the UI can display the actual crypto stack
+            if (isPqcEstablished) {
+                _callState.update { it?.copy(pqcEstablished = true) }
+            }
+            logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
+            sessionKeys
         }
-
-        val isPqcEstablished = pqcSecret.isNotEmpty()
-
-        // Combine classical + PQC secrets via SHAKE-256 KDF, then zeroize inputs
-        val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
-        classicalSecret.fill(0)
-        if (isPqcEstablished) pqcSecret.fill(0)
-
-        val sharedSecret = shake256Kdf(
-            ikm = ikm,
-            salt = "ChatControll-v1-call-init".toByteArray(Charsets.UTF_8),
-            info = "hybrid-key-establishment".toByteArray(Charsets.UTF_8),
-            length = 32,
-        )
-        ikm.fill(0)
-
-        // Derive bidirectional chain keys
-        val chainMaterial = shake256Kdf(
-            ikm = sharedSecret,
-            salt = "ChatControll-v1-call-chains".toByteArray(Charsets.UTF_8),
-            info = "bidirectional-chains".toByteArray(Charsets.UTF_8),
-            length = 64,
-        )
-        sharedSecret.fill(0)
-
-        val chainA = chainMaterial.copyOfRange(0, 32)
-        val chainB = chainMaterial.copyOfRange(32, 64)
-        chainMaterial.fill(0)
-
-        val sessionKeys = SessionKeys(
-            sendKey = if (isInitiator) chainA else chainB,
-            receiveKey = if (isInitiator) chainB else chainA,
-            sessionId = "call-$peerId",
-            pqcEstablished = isPqcEstablished,
-        )
-        if (isPqcEstablished) {
-            logDebug("PQC hybrid key agreement established for call with ${peerId.take(8)}")
-        }
-
-        // Guard: if endCall() ran while we were suspended (e.g. during
-        // fetchKeyBundle), the call is over and _callSessionKeys was already
-        // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
-        val currentCall = _callState.value
-        if (currentCall == null || currentCall.peerId != peerId ||
-            currentCall.status == CallStatus.ENDED || currentCall.status == CallStatus.FAILED
-        ) {
-            sessionKeys.sendKey.fill(0)
-            sessionKeys.receiveKey.fill(0)
-            throw IllegalStateException("Call ended while deriving session keys for $peerId")
-        }
-
-        _callSessionKeys[peerId] = sessionKeys
-        // Update CallState so the UI can display the actual crypto stack
-        if (isPqcEstablished) {
-            _callState.update { it?.copy(pqcEstablished = true) }
-        }
-        logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
-        return sessionKeys
     }
 
     /**
