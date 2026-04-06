@@ -9,10 +9,14 @@ class Converters {
         Base64.encodeToString(value, Base64.NO_WRAP)
 
     @TypeConverter
-    fun toByteArray(value: String): ByteArray = try {
-        Base64.decode(value, Base64.NO_WRAP)
-    } catch (e: IllegalArgumentException) {
-        if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("Converters", "Invalid Base64 in database column", e)
-        ByteArray(0)
+    fun toByteArray(value: String): ByteArray {
+        if (value.isEmpty()) return ByteArray(0)
+        return try {
+            Base64.decode(value, Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            // Always log — corrupted DB data should be visible in production too
+            android.util.Log.e("Converters", "Corrupted Base64 in database column", e)
+            ByteArray(0)
+        }
     }
 }

@@ -16,8 +16,15 @@ data class ContactEntity(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is ContactEntity) return false
-        return userId == other.userId
+        return userId == other.userId &&
+            publicIdentityKey.contentEquals(other.publicIdentityKey) &&
+            publicSigningKey.contentEquals(other.publicSigningKey)
     }
 
-    override fun hashCode(): Int = userId.hashCode()
+    override fun hashCode(): Int {
+        var result = userId.hashCode()
+        result = 31 * result + publicIdentityKey.contentHashCode()
+        result = 31 * result + publicSigningKey.contentHashCode()
+        return result
+    }
 }

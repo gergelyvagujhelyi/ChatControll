@@ -140,7 +140,7 @@ class HybridCryptoEngine @Inject constructor(
 
     override fun deriveShareCode(publicIdentityKey: ByteArray): String {
         val hash = MessageDigest.getInstance("SHA-256").digest(publicIdentityKey)
-        return Base64.getUrlEncoder().encodeToString(hash.copyOfRange(0, 12))
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(hash.copyOfRange(0, 12))
     }
 
     companion object {

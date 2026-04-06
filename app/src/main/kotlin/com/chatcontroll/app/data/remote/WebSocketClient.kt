@@ -65,6 +65,7 @@ class WebSocketClient @Inject constructor(
     private var connectionJob: Job? = null
     private var reconnectDelay = INITIAL_RECONNECT_DELAY
 
+    @Synchronized
     fun connect() {
         if (connectionJob?.isActive == true) return
 
@@ -88,15 +89,18 @@ class WebSocketClient @Inject constructor(
      * while the WebSocket is in an exponential backoff cycle — the server may
      * have buffered call signals that need delivery now.
      */
+    @Synchronized
     fun ensureConnected() {
         if (connectionJob?.isActive == true) {
             // Already reconnecting with backoff — restart to connect immediately
             connectionJob?.cancel()
+            connectionJob = null
         }
         reconnectDelay = INITIAL_RECONNECT_DELAY
         connect()
     }
 
+    @Synchronized
     fun disconnect() {
         connectionJob?.cancel()
         connectionJob = null
@@ -114,9 +118,11 @@ class WebSocketClient @Inject constructor(
 
     private suspend fun connectWebSocket() {
         val token = generateAuthToken() ?: return
-        val baseUrl = BuildConfig.API_BASE_URL
-            .replace("https://", "wss://")
-            .replace("http://", "ws://")
+        val baseUrl = if (BuildConfig.API_BASE_URL.startsWith("https://")) {
+            "wss://" + BuildConfig.API_BASE_URL.removePrefix("https://")
+        } else {
+            "ws://" + BuildConfig.API_BASE_URL.removePrefix("http://")
+        }
 
         client.webSocket("$baseUrl/v1/ws") {
             // Authenticate with signed token

@@ -149,6 +149,6 @@ class MockApiService @Inject constructor() : ApiService {
     private fun deriveShareCode(publicIdentityKeyBase64: String): String {
         val keyBytes = Base64.decode(publicIdentityKeyBase64, Base64.NO_WRAP)
         val hash = MessageDigest.getInstance("SHA-256").digest(keyBytes)
-        return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP)
+        return Base64.encodeToString(hash.copyOfRange(0, 12), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 }

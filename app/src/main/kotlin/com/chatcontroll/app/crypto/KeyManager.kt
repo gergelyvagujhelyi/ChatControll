@@ -271,7 +271,9 @@ class KeyManager @Inject constructor(
             editor.putString(KEY_PQC_DECAPSULATION, pqcDk)
         }
 
-        // Clear staged keys and apply atomically
+        // Clear staged keys and commit synchronously for crash safety.
+        // This is the crash-recovery path — apply() could lose data if the
+        // process dies between return and the async disk write.
         editor
             .remove(PENDING_PUBLIC_SIGNING)
             .remove(PENDING_PRIVATE_SIGNING)
@@ -279,7 +281,7 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PRIVATE_IDENTITY)
             .remove(PENDING_PQC_ENCAPSULATION)
             .remove(PENDING_PQC_DECAPSULATION)
-            .apply()
+            .commit()
     }
 
     fun hasStagedKeys(): Boolean {
