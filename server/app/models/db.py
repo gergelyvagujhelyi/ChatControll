@@ -55,6 +55,7 @@ class PendingMessage(Base):
     nonce = Column(Text, nullable=False)
     ephemeral_public_key = Column(Text, nullable=False, default="")
     signature = Column(Text, nullable=False, default="")
+    pqc_signature = Column(Text, nullable=False, default="")
     timestamp_ms = Column(BigInteger, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 

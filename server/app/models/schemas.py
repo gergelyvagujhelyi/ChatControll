@@ -48,6 +48,7 @@ class SendMessageRequest(BaseModel):
     nonce: str = Field(..., max_length=4096)  # Carries ratchet header JSON; first PQC msg includes ML-KEM ciphertext (~1.6 KB)
     ephemeral_public_key: str = Field("", max_length=4096)
     signature: str = Field("", max_length=512)
+    pqc_signature: str = Field("", max_length=4608)  # ML-DSA-65 signature
 
 
 class SendMessageResponse(BaseModel):
@@ -62,6 +63,7 @@ class PendingMessageResponse(BaseModel):
     nonce: str
     ephemeral_public_key: str = ""
     signature: str = ""
+    pqc_signature: str = ""
     timestamp: int
 
 

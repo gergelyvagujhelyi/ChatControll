@@ -16,6 +16,7 @@ import javax.inject.Singleton
 @Singleton
 class SessionResetSender @Inject constructor(
     private val keyManager: KeyManager,
+    private val pqcProvider: PqcProvider,
     private val apiService: ApiService,
 ) {
     /**
@@ -36,6 +37,18 @@ class SessionResetSender @Inject constructor(
 
         val sigPayload = buildMessageSigPayload(senderId, recipientId, nonceBytes, bodyBytes)
         val signature = keyManager.sign(sigPayload)
+        val pqcSigB64 = try {
+            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    Base64.encodeToString(pqcProvider.sign(sigPayload, mlDsaPrivKey), Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (e: Exception) {
+            ""
+        }
 
         apiService.sendMessage(
             SendMessageRequest(
@@ -43,6 +56,7 @@ class SessionResetSender @Inject constructor(
                 encryptedBody = Base64.encodeToString(bodyBytes, Base64.NO_WRAP),
                 nonce = Base64.encodeToString(nonceBytes, Base64.NO_WRAP),
                 signature = Base64.encodeToString(signature, Base64.NO_WRAP),
+                pqcSignature = pqcSigB64,
             )
         )
     }

@@ -33,6 +33,7 @@ data class SendMessageRequest(
     val nonce: String,
     val ephemeralPublicKey: String = "",
     val signature: String = "",
+    val pqcSignature: String = "",
 )
 
 @Serializable
@@ -49,6 +50,7 @@ data class PendingMessageDto(
     val nonce: String,
     val ephemeralPublicKey: String = "",
     val signature: String = "",
+    val pqcSignature: String = "",
     val timestamp: Long,
 )
 
