@@ -272,17 +272,22 @@ class IdentityRepositoryImpl @Inject constructor(
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {
         val bundle = apiService.fetchKeyBundle(userId) ?: return null
-        return try {
-            Contact(
-                userId = bundle.userId,
-                displayName = bundle.userId.take(8),
-                publicIdentityKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP),
-                publicSigningKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP),
-            )
+        val pubIdKey = try {
+            Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
-            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("IdentityRepo", "Malformed Base64 in key bundle for $userId", e)
-            null
+            throw IllegalStateException("Malformed Base64 in identity key bundle for ${userId.take(8)}", e)
         }
+        val pubSignKey = try {
+            Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalStateException("Malformed Base64 in signing key bundle for ${userId.take(8)}", e)
+        }
+        return Contact(
+            userId = bundle.userId,
+            displayName = bundle.userId.take(8),
+            publicIdentityKey = pubIdKey,
+            publicSigningKey = pubSignKey,
+        )
     }
 
     override fun isPqcSession(peerId: String): Boolean = keyManager.isPeerPqcEstablished(peerId)

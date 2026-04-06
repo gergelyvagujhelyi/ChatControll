@@ -21,6 +21,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import android.Manifest
 import android.content.pm.PackageManager
@@ -52,6 +55,15 @@ fun CallScreen(
 ) {
     val context = LocalContext.current
     val callState by viewModel.callState.collectAsState()
+    val callError by viewModel.callError.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(callError) {
+        callError?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearCallError()
+        }
+    }
 
     // Permission launcher — shared by outgoing auto-start and incoming Accept button.
     // The callback checks current state to decide what to do after grant.
@@ -104,10 +116,14 @@ fun CallScreen(
         }
     }
 
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface)
+            .padding(padding)
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween,
@@ -258,6 +274,7 @@ fun CallScreen(
 
         Spacer(modifier = Modifier.height(48.dp))
     }
+    } // Scaffold
 }
 
 @Composable

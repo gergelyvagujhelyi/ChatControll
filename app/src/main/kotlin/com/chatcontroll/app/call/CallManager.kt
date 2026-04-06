@@ -89,8 +89,16 @@ class CallManager @Inject constructor(
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
      *  Insertion order (accessOrder=false) so time-based eviction is correct. */
     private val seenSignalSignatures = LinkedHashMap<String, Long>(64, 0.75f, false)
+    private val _callError = MutableStateFlow<String?>(null)
+    val callError: StateFlow<String?> = _callError.asStateFlow()
+
+    fun clearCallError() { _callError.value = null }
+
     fun initiateCall(peerId: String, peerDisplayName: String) {
-        if (_callState.value != null) return
+        if (_callState.value != null) {
+            _callError.value = "Already in a call"
+            return
+        }
 
         val callId = UUID.randomUUID().toString()
         _callState.value = CallState(
@@ -354,8 +362,23 @@ class CallManager @Inject constructor(
     fun toggleSpeaker() {
         val state = _callState.value ?: return
         val newSpeaker = !state.isSpeakerOn
-        audioManager.isSpeakerphoneOn = newSpeaker
+        setSpeakerphone(newSpeaker)
         _callState.update { it?.copy(isSpeakerOn = newSpeaker) }
+    }
+
+    private fun setSpeakerphone(on: Boolean) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (on) {
+                val speaker = audioManager.availableCommunicationDevices
+                    .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (speaker != null) audioManager.setCommunicationDevice(speaker)
+            } else {
+                audioManager.clearCommunicationDevice()
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = on
+        }
     }
 
     private var _pendingOfferPayload: String? = null
@@ -461,10 +484,12 @@ class CallManager @Inject constructor(
             }
         }
 
-        // Clear state after a short delay so UI can show the end status
+        // Clear state after a short delay so UI can show the end status.
+        // Compare callId (not status) so a rapid back-to-back call isn't cleared.
+        val endedCallId = endingState?.callId
         scope.launch {
             kotlinx.coroutines.delay(2000)
-            if (_callState.value?.status == status) {
+            if (_callState.value?.callId == endedCallId) {
                 _callState.value = null
             }
         }
@@ -890,7 +915,7 @@ class CallManager @Inject constructor(
     private fun abandonAudioFocus() {
         audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         audioManager.mode = AudioManager.MODE_NORMAL
-        audioManager.isSpeakerphoneOn = false
+        setSpeakerphone(false)
     }
 
     private fun logDebug(msg: String) {
