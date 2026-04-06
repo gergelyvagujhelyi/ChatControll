@@ -33,14 +33,18 @@ class ChatNotificationManager @Inject constructor(
     private fun createNotificationChannels() {
         val manager = context.getSystemService(NotificationManager::class.java)
 
+        // Delete legacy channel whose VISIBILITY_SECRET default caps per-notification visibility
+        manager.deleteNotificationChannel(CHANNEL_MESSAGES_LEGACY)
+
         val messageChannel = NotificationChannel(
             CHANNEL_MESSAGES,
             "Messages",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = "New message notifications"
-            // Default to no lock screen content — respects privacy settings
-            lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
+            // Leave lockscreenVisibility at default (VISIBILITY_PRIVATE) so
+            // per-notification visibility set dynamically from privacy settings
+            // is not capped by the channel.
         }
 
         val serviceChannel = NotificationChannel(
@@ -127,7 +131,9 @@ class ChatNotificationManager @Inject constructor(
     }
 
     companion object {
-        const val CHANNEL_MESSAGES = "messages"
+        /** Legacy channel ID — had VISIBILITY_SECRET that capped per-notification visibility. */
+        private const val CHANNEL_MESSAGES_LEGACY = "messages"
+        const val CHANNEL_MESSAGES = "messages_v2"
         const val CHANNEL_SERVICE = "background_service"
         const val EXTRA_CONVERSATION_ID = "conversation_id"
         const val EXTRA_CONTACT_ID = "contact_id"

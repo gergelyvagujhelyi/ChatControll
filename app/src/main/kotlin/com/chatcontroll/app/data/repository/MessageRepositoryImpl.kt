@@ -62,21 +62,20 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     /**
-     * Evict unlocked peer mutexes and stale tracking entries when maps grow
-     * beyond [PRUNE_THRESHOLD] to prevent unbounded memory growth on
-     * long-lived installs.
+     * Evict stale tracking entries when maps grow beyond [PRUNE_THRESHOLD]
+     * to prevent unbounded memory growth on long-lived installs.
+     *
+     * peerLocks is intentionally not pruned: its size is bounded by the
+     * number of contacts, and removing an "unlocked" mutex races with
+     * threads about to acquire it.
      */
     private fun pruneInMemoryMaps() {
-        if (peerLocks.size > PRUNE_THRESHOLD) {
-            val toRemove = peerLocks.entries
-                .filter { !it.value.isLocked }
-                .map { it.key }
-            toRemove.forEach { peerLocks.remove(it) }
-        }
         if (decryptFailCounts.size > PRUNE_THRESHOLD) {
+            // Evict entries with the lowest retry counts first to ensure that
+            // messages nearing the MAX_DECRYPT_RETRIES limit are correctly tombstoned.
             val evictCount = decryptFailCounts.size - PRUNE_THRESHOLD
             decryptFailCounts.entries
-                .sortedByDescending { it.value }
+                .sortedBy { it.value }
                 .take(evictCount)
                 .forEach { decryptFailCounts.remove(it.key) }
         }
@@ -118,7 +117,7 @@ class MessageRepositoryImpl @Inject constructor(
         messageDao.insert(entity)
 
         // Serialize ratchet operations per peer to prevent state divergence
-        val peerMutex = peerLocks.getOrPut(recipientId) { kotlinx.coroutines.sync.Mutex() }
+        val peerMutex = peerLocks.computeIfAbsent(recipientId) { kotlinx.coroutines.sync.Mutex() }
         val envelope = try {
             peerMutex.withLock {
                 var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
@@ -179,7 +178,7 @@ class MessageRepositoryImpl @Inject constructor(
         messageDao.updateState(messageId, MessageState.SENDING.name)
 
         // Serialize ratchet operations per peer — same lock used by sendMessage/fetch
-        val peerMutex = peerLocks.getOrPut(entity.recipientId) { kotlinx.coroutines.sync.Mutex() }
+        val peerMutex = peerLocks.computeIfAbsent(entity.recipientId) { kotlinx.coroutines.sync.Mutex() }
         try {
             val envelope = peerMutex.withLock {
                 var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
@@ -303,7 +302,7 @@ class MessageRepositoryImpl @Inject constructor(
                 }
             }
 
-            val peerMutex = peerLocks.getOrPut(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
+            val peerMutex = peerLocks.computeIfAbsent(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
             val plaintext = try {
                 val result = peerMutex.withLock {
                     cryptoEngine.decrypt(sessionKeys, envelope)

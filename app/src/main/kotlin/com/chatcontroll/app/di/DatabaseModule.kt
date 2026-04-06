@@ -83,6 +83,22 @@ object DatabaseModule {
         }
     }
 
+    /** v5→v6: add unique index on conversations.contactId to prevent duplicate rows per contact. */
+    private val MIGRATION_5_6 = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Remove any duplicate contactId rows, keeping the one with the latest message
+            db.execSQL("""
+                DELETE FROM conversations WHERE id NOT IN (
+                    SELECT id FROM (
+                        SELECT id, ROW_NUMBER() OVER (PARTITION BY contactId ORDER BY lastMessageTimestamp DESC) AS rn
+                        FROM conversations
+                    ) WHERE rn = 1
+                )
+            """.trimIndent())
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_conversations_contactId ON conversations (contactId)")
+        }
+    }
+
     private fun buildDatabase(context: Context, factory: SupportOpenHelperFactory): AppDatabase {
         return Room.databaseBuilder(
             context,
@@ -90,7 +106,7 @@ object DatabaseModule {
             DB_NAME,
         )
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build()
     }
