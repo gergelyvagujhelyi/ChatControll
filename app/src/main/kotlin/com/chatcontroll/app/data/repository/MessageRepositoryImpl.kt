@@ -2,6 +2,8 @@ package com.chatcontroll.app.data.repository
 
 import android.util.Base64
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.SessionResetSender
+import com.chatcontroll.app.crypto.buildMessageSigPayload
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.dao.ConversationDao
 import com.chatcontroll.app.data.local.dao.MessageDao
@@ -23,7 +25,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
-import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -37,6 +38,7 @@ class MessageRepositoryImpl @Inject constructor(
     private val apiService: ApiService,
     private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
+    private val sessionResetSender: SessionResetSender,
 ) : MessageRepository {
 
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
@@ -108,10 +110,8 @@ class MessageRepositoryImpl @Inject constructor(
         // Update the stored message with the encrypted payload
         messageDao.updateEncryptedBody(messageId, envelope.ciphertext, envelope.nonce)
 
-        // Sign the envelope for recipient verification (length-prefixed to prevent ambiguity)
-        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(recipientId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(envelope.nonce) + envelope.ciphertext
+        // Sign the envelope for recipient verification
+        val sigPayload = buildMessageSigPayload(senderId, recipientId, envelope.nonce, envelope.ciphertext)
         val signature = keyManager.sign(sigPayload)
         val signatureB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
 
@@ -163,9 +163,7 @@ class MessageRepositoryImpl @Inject constructor(
             val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
             val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
-            val retrySigPayload = lengthPrefixed(retrySenderId.toByteArray(Charsets.UTF_8)) +
-                lengthPrefixed(entity.recipientId.toByteArray(Charsets.UTF_8)) +
-                lengthPrefixed(envelope.nonce) + envelope.ciphertext
+            val retrySigPayload = buildMessageSigPayload(retrySenderId, entity.recipientId, envelope.nonce, envelope.ciphertext)
             val retrySignature = keyManager.sign(retrySigPayload)
 
             val response = apiService.sendMessage(
@@ -257,9 +255,7 @@ class MessageRepositoryImpl @Inject constructor(
                     receivedIds.add(dto.messageId)
                     continue
                 }
-                val sigPayload = lengthPrefixed(dto.senderId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(envelope.nonce) + envelope.ciphertext
+                val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
                 val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
@@ -485,7 +481,7 @@ class MessageRepositoryImpl @Inject constructor(
             // Notify the sender that they need to re-establish their session
             if (senderId !in sessionResetSentTo) {
                 try {
-                    sendSessionResetSignal(senderId)
+                    sessionResetSender.send(senderId)
                     sessionResetSentTo.add(senderId)
                 } catch (e: Exception) {
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
@@ -517,31 +513,6 @@ class MessageRepositoryImpl @Inject constructor(
             expiresAt = null,
             isOutgoing = false,
         ))
-    }
-
-    /**
-     * Send a session_reset control message to a peer whose messages we can't decrypt.
-     * Uses the existing message pipeline for guaranteed delivery (store-and-forward).
-     */
-    private suspend fun sendSessionResetSignal(recipientId: String) {
-        val senderId = keyManager.getUserId() ?: return
-        val controlPayload = """{"ctrl":"session_reset"}"""
-        val nonceBytes = controlPayload.toByteArray(Charsets.UTF_8)
-        val bodyBytes = ByteArray(0)
-
-        val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(recipientId.toByteArray(Charsets.UTF_8)) +
-            lengthPrefixed(nonceBytes) + bodyBytes
-        val signature = keyManager.sign(sigPayload)
-
-        apiService.sendMessage(
-            SendMessageRequest(
-                recipientId = recipientId,
-                encryptedBody = Base64.encodeToString(bodyBytes, Base64.NO_WRAP),
-                nonce = Base64.encodeToString(nonceBytes, Base64.NO_WRAP),
-                signature = Base64.encodeToString(signature, Base64.NO_WRAP),
-            )
-        )
     }
 
     /**
@@ -588,9 +559,7 @@ class MessageRepositoryImpl @Inject constructor(
             } catch (_: Exception) { null }
 
             if (pubSignKey != null) {
-                val sigPayload = lengthPrefixed(dto.senderId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
-                    lengthPrefixed(nonceBytes) + ByteArray(0)
+                val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
                 val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
                 if (!valid) {
@@ -668,11 +637,6 @@ class MessageRepositoryImpl @Inject constructor(
             )
         )
     }
-}
-
-/** Prepend 4-byte big-endian length prefix to prevent concatenation ambiguity in signature payloads. */
-private fun lengthPrefixed(data: ByteArray): ByteArray {
-    return ByteBuffer.allocate(4).putInt(data.size).array() + data
 }
 
 private fun MessageEntity.toDomain(localUserId: String): Message {

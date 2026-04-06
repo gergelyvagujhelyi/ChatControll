@@ -9,6 +9,7 @@ import android.util.Log
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.hkdfSha256
+import com.chatcontroll.app.crypto.lengthPrefixed
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
@@ -24,7 +25,6 @@ import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.SessionKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.nio.ByteBuffer
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -941,10 +941,6 @@ class CallManager @Inject constructor(
         /** Callee ringing timeout — longer than caller's so caller hangup arrives first. */
         private const val CALLEE_RINGING_TIMEOUT_MS = 45_000L
     }
-}
-
-private fun lengthPrefixed(data: ByteArray): ByteArray {
-    return ByteBuffer.allocate(4).putInt(data.size).array() + data
 }
 
 private fun ByteArray.toCallHex(): String = joinToString("") { "%02x".format(it) }
