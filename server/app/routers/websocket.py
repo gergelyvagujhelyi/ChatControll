@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_SIGNAL_TYPES = frozenset({
     "call_offer", "call_answer", "call_ice_candidate",
-    "call_hangup", "call_busy", "call_reject",
+    "call_hangup", "call_busy", "call_reject", "call_ringing",
 })
 _MAX_CALL_OFFERS_PER_MINUTE = 10
 _MAX_SIGNALS_PER_MINUTE = 100

@@ -197,7 +197,7 @@ class WebSocketClient @Inject constructor(
                 "pong" -> { /* Expected keepalive response */ }
 
                 "call_offer", "call_answer", "call_ice_candidate",
-                "call_hangup", "call_busy", "call_reject" -> {
+                "call_hangup", "call_busy", "call_reject", "call_ringing" -> {
                     val signal = CallSignalDto(
                         senderId = msg["sender_id"]?.jsonPrimitive?.content ?: return,
                         signalType = msg["type"]?.jsonPrimitive?.content ?: return,

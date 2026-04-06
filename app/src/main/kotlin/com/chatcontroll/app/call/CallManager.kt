@@ -128,11 +128,8 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 if (result) {
-                    // Delivered via WebSocket — peer's phone is ringing
-                    _callState.update { it?.copy(status = CallStatus.RINGING) }
-                    logDebug("call_offer delivered via WebSocket")
+                    logDebug("call_offer delivered via WebSocket — waiting for call_ringing confirmation")
                 } else {
-                    // Buffered by server — stay in CONNECTING until peer comes online
                     logDebug("call_offer buffered by server — waiting for FCM to wake recipient")
                 }
                 startRingingTimeout(callId)
@@ -271,6 +268,18 @@ class CallManager @Inject constructor(
                             return@launch
                         }
                     }
+                    "call_ringing" -> {
+                        val state = _callState.value
+                        if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
+                            logDebug("Ignoring call_ringing: no matching active call")
+                            return@launch
+                        }
+                        if (state.direction == CallDirection.OUTGOING && state.status == CallStatus.CONNECTING) {
+                            _callState.value = state.copy(status = CallStatus.RINGING)
+                            logDebug("Peer confirmed ringing")
+                        }
+                        return@launch
+                    }
                     "call_hangup", "call_reject", "call_busy" -> {
                         val state = _callState.value
                         if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
@@ -292,7 +301,8 @@ class CallManager @Inject constructor(
                 when (signal.signalType) {
                     "call_offer" -> {
                         if (_callState.value?.callId == signal.callId) {
-                            // Offer accepted — start callee ringing timeout
+                            // Confirm to the caller that we're ringing
+                            sendSignal(signal.senderId, "call_ringing", signal.callId, "")
                             startCalleeRingingTimeout(signal.callId)
                         } else {
                             // Already in a call — send busy outside the mutex
