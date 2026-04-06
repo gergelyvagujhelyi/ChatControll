@@ -171,10 +171,6 @@ class RatchetSessionManager @Inject constructor(
             val state = getOrLoadSession(sessionKeys.sessionId)
                 ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
-            // Snapshot persisted state before mutation so we can always
-            // rollback to a known-good state if anything fails.
-            val snapshot = loadPersistedSession(sessionKeys.sessionId)
-
             val (header, ciphertext) = ratchet.encrypt(state, plaintext)
 
             // Attach PQC KEM ciphertext to the first outbound message header
@@ -191,13 +187,14 @@ class RatchetSessionManager @Inject constructor(
             try {
                 persistSession(sessionKeys.sessionId, state)
             } catch (e: Exception) {
-                // Rollback to the pre-mutation snapshot (loaded before encrypt)
-                // instead of re-reading from disk, which could itself fail.
-                if (snapshot != null) {
-                    sessions[sessionKeys.sessionId] = snapshot
-                } else {
-                    sessions.remove(sessionKeys.sessionId)
-                }
+                // Persistence failed after ratchet.encrypt() mutated state.
+                // We MUST NOT rollback to a prior state — the chain has advanced
+                // and message keys have been consumed. Restoring an older state
+                // would reuse the same key+nonce on the next encrypt(), which
+                // catastrophically breaks AES-GCM (enables key recovery).
+                // Instead, invalidate the session so the caller re-establishes.
+                sessions.remove(sessionKeys.sessionId)
+                keyManager.removeRatchetState(sessionKeys.sessionId)
                 throw e
             }
 
@@ -218,9 +215,6 @@ class RatchetSessionManager @Inject constructor(
             val state = getOrLoadSession(sessionKeys.sessionId)
                 ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
-            // Snapshot persisted state before mutation for reliable rollback.
-            val snapshot = loadPersistedSession(sessionKeys.sessionId)
-
             val headerJson = String(envelope.nonce, Charsets.UTF_8)
             val header = json.decodeFromString<RatchetHeader>(headerJson)
 
@@ -238,13 +232,11 @@ class RatchetSessionManager @Inject constructor(
                 persistSession(sessionKeys.sessionId, state)
                 plaintext
             } catch (e: Exception) {
-                // Rollback to pre-mutation snapshot — avoids re-reading from disk
-                // which could itself fail and leave state as null.
-                if (snapshot != null) {
-                    sessions[sessionKeys.sessionId] = snapshot
-                } else {
-                    sessions.remove(sessionKeys.sessionId)
-                }
+                // Same reasoning as encrypt: ratchet.decrypt() consumes keys
+                // (DH ratchet step, skip keys). Restoring a prior state would
+                // allow message replay or key reuse. Invalidate the session.
+                sessions.remove(sessionKeys.sessionId)
+                keyManager.removeRatchetState(sessionKeys.sessionId)
                 throw e
             }
         }
