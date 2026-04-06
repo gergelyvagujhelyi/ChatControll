@@ -73,11 +73,13 @@ class MessageRepositoryImpl @Inject constructor(
         if (decryptFailCounts.size > PRUNE_THRESHOLD) {
             // Evict entries with the lowest retry counts first to ensure that
             // messages nearing the MAX_DECRYPT_RETRIES limit are correctly tombstoned.
+            // Snapshot keys to avoid ConcurrentModificationException.
             val evictCount = decryptFailCounts.size - PRUNE_THRESHOLD
-            decryptFailCounts.entries
+            val keysToEvict = decryptFailCounts.entries.toList()
                 .sortedBy { it.value }
                 .take(evictCount)
-                .forEach { decryptFailCounts.remove(it.key) }
+                .map { it.key }
+            keysToEvict.forEach { decryptFailCounts.remove(it) }
         }
         if (sessionResetSentTo.size > PRUNE_THRESHOLD) {
             sessionResetSentTo.clear()

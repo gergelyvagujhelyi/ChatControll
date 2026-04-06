@@ -82,6 +82,7 @@ class CallManager @Inject constructor(
     private val signalMutex = kotlinx.coroutines.sync.Mutex()
     private var ringingTimeoutJob: Job? = null
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
+    @Volatile
     private var remoteDescriptionSet = false
     /** Per-call cache of derived session keys — cleared in endCall(). */
     private val _callSessionKeys = mutableMapOf<String, SessionKeys>()
@@ -114,7 +115,8 @@ class CallManager @Inject constructor(
                 logDebug("Setting up WebRTC for outgoing call")
                 setupWebRtc(peerId)
                 logDebug("Creating SDP offer")
-                val sdp = webRtcEngine!!.createOffer()
+                val sdp = webRtcEngine?.createOffer()
+                    ?: throw IllegalStateException("WebRTC engine not initialized")
                 logDebug("Sending call_offer signal")
                 val result = sendSignal(peerId, "call_offer", callId, json.encodeToString(SdpPayload(sdp)))
                 if (result == null) {
@@ -291,11 +293,14 @@ class CallManager @Inject constructor(
         _callState.value = state.copy(status = CallStatus.CONNECTING, isNewContact = false)
 
         scope.launch {
-            // Persist the new contact now that the user has approved the call
-            _pendingNewContact?.let { contact ->
-                contactDao.upsert(contact)
-                logDebug("Persisted new contact ${contact.userId.take(8)} on call accept")
-                _pendingNewContact = null
+            // Persist the new contact now that the user has approved the call.
+            // Access under signalMutex to synchronize with handleIncomingSignal().
+            signalMutex.withLock {
+                _pendingNewContact?.let { contact ->
+                    contactDao.upsert(contact)
+                    logDebug("Persisted new contact ${contact.userId.take(8)} on call accept")
+                    _pendingNewContact = null
+                }
             }
 
             try {
@@ -314,7 +319,8 @@ class CallManager @Inject constructor(
                 val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
                 logDebug("Decoded offer SDP (${sdpPayload.sdp.length} chars)")
 
-                val answerSdp = webRtcEngine!!.handleRemoteOffer(sdpPayload.sdp)
+                val answerSdp = webRtcEngine?.handleRemoteOffer(sdpPayload.sdp)
+                    ?: throw IllegalStateException("WebRTC engine not initialized")
                 logDebug("Created answer SDP")
 
                 remoteDescriptionSet = true
@@ -381,6 +387,7 @@ class CallManager @Inject constructor(
         }
     }
 
+    @Volatile
     private var _pendingOfferPayload: String? = null
     /** Contact fetched from the server for an unknown caller — persisted only on accept. */
     @Volatile
