@@ -20,6 +20,7 @@ import com.chatcontroll.app.domain.repository.EncryptedEnvelope
 import com.chatcontroll.app.domain.repository.MessageRepository
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
+import com.chatcontroll.app.notification.ChatNotificationManager
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +40,7 @@ class MessageRepositoryImpl @Inject constructor(
     private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
     private val sessionResetSender: SessionResetSender,
+    private val notificationManager: ChatNotificationManager,
 ) : MessageRepository {
 
     private val fetchLock = kotlinx.coroutines.sync.Mutex()
@@ -57,6 +59,30 @@ class MessageRepositoryImpl @Inject constructor(
 
     override fun setActiveConversation(conversationId: String?) {
         activeConversationId = conversationId
+    }
+
+    /**
+     * Evict unlocked peer mutexes and stale tracking entries when maps grow
+     * beyond [PRUNE_THRESHOLD] to prevent unbounded memory growth on
+     * long-lived installs.
+     */
+    private fun pruneInMemoryMaps() {
+        if (peerLocks.size > PRUNE_THRESHOLD) {
+            val toRemove = peerLocks.entries
+                .filter { !it.value.isLocked }
+                .map { it.key }
+            toRemove.forEach { peerLocks.remove(it) }
+        }
+        if (decryptFailCounts.size > PRUNE_THRESHOLD) {
+            val evictCount = decryptFailCounts.size - PRUNE_THRESHOLD
+            decryptFailCounts.entries
+                .sortedByDescending { it.value }
+                .take(evictCount)
+                .forEach { decryptFailCounts.remove(it.key) }
+        }
+        if (sessionResetSentTo.size > PRUNE_THRESHOLD) {
+            sessionResetSentTo.clear()
+        }
     }
 
     override fun getMessages(conversationId: String): Flow<List<Message>> {
@@ -152,15 +178,17 @@ class MessageRepositoryImpl @Inject constructor(
         val plaintext = entity.plaintext ?: return // Cannot retry without plaintext
         messageDao.updateState(messageId, MessageState.SENDING.name)
 
+        // Serialize ratchet operations per peer — same lock used by sendMessage/fetch
+        val peerMutex = peerLocks.getOrPut(entity.recipientId) { kotlinx.coroutines.sync.Mutex() }
         try {
-            // Re-encrypt with current ratchet state instead of sending stale ciphertext
-            var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
-            if (sessionKeys == null) {
-                sessionKeys = tryEstablishSession(entity.recipientId, encapsulateIfAvailable = true)
-                    ?: throw IllegalStateException("No session for retry")
+            val envelope = peerMutex.withLock {
+                var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
+                if (sessionKeys == null) {
+                    sessionKeys = tryEstablishSession(entity.recipientId, encapsulateIfAvailable = true)
+                        ?: throw IllegalStateException("No session for retry")
+                }
+                cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
             }
-
-            val envelope = cryptoEngine.encrypt(sessionKeys, plaintext.toByteArray(Charsets.UTF_8))
 
             val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
             val retrySigPayload = buildMessageSigPayload(retrySenderId, entity.recipientId, envelope.nonce, envelope.ciphertext)
@@ -199,6 +227,8 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     private suspend fun fetchPendingInternal() {
+        pruneInMemoryMaps()
+
         val pending = apiService.fetchPendingMessages()
         if (pending.isEmpty()) return
 
@@ -229,9 +259,11 @@ class MessageRepositoryImpl @Inject constructor(
                 nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
             )
 
+            // Fetch contact once for signature checks and notification display
+            var senderContact = contactDao.getByUserId(dto.senderId)
+
             // Check if signature is required: reject unsigned messages unless
             // the contact explicitly has signatureRequired=false (legacy contact)
-            val senderContact = contactDao.getByUserId(dto.senderId)
             if (dto.signature.isEmpty() && (senderContact == null || senderContact.signatureRequired)) {
                 if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Rejecting unsigned message from ${dto.senderId.take(8)}")
                 storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
@@ -241,14 +273,12 @@ class MessageRepositoryImpl @Inject constructor(
 
             // Verify sender signature if present
             if (dto.signature.isNotEmpty()) {
-                // Ensure contact exists so we have the public signing key
-                var contact = contactDao.getByUserId(dto.senderId)
-                if (contact == null) {
+                if (senderContact == null) {
                     // Force session establishment to fetch and save the key bundle
                     tryEstablishSession(dto.senderId, kemCiphertext)
-                    contact = contactDao.getByUserId(dto.senderId)
+                    senderContact = contactDao.getByUserId(dto.senderId)
                 }
-                if (contact == null) {
+                if (senderContact == null) {
                     // Cannot verify — reject the message
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
                     storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
@@ -262,7 +292,7 @@ class MessageRepositoryImpl @Inject constructor(
                     receivedIds.add(dto.messageId)
                     continue
                 }
-                val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
+                val valid = cryptoEngine.verify(sigPayload, sig, senderContact.publicSigningKey)
                 if (!valid) {
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
                     // Don't ACK immediately — leave in pending queue for retry on
@@ -330,13 +360,26 @@ class MessageRepositoryImpl @Inject constructor(
             messageDao.insert(entity)
             receivedIds.add(dto.messageId)
 
+            val isActive = conversationId == activeConversationId
             updateConversationPreview(
                 conversationId,
                 dto.senderId,
                 plaintextStr,
                 dto.timestamp,
-                incrementUnread = conversationId != activeConversationId,
+                incrementUnread = !isActive,
             )
+
+            // Show notification for messages outside the active conversation
+            if (!isActive) {
+                val senderName = senderContact?.displayName
+                    ?: dto.senderId.take(8)
+                notificationManager.showMessageNotification(
+                    senderId = dto.senderId,
+                    senderName = senderName,
+                    messageBody = plaintextStr,
+                    conversationId = conversationId,
+                )
+            }
         }
 
         if (receivedIds.isNotEmpty()) {
@@ -675,6 +718,9 @@ class MessageRepositoryImpl @Inject constructor(
         /** After this many failed decrypt attempts, acknowledge the message to
          *  prevent it from poisoning the pending queue forever. */
         private const val MAX_DECRYPT_RETRIES = 3
+
+        /** Evict stale entries from in-memory maps when they exceed this size. */
+        private const val PRUNE_THRESHOLD = 200
     }
 
     private suspend fun updateConversationPreview(
