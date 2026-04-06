@@ -83,6 +83,13 @@ object DatabaseModule {
         }
     }
 
+    /** v6→v7: add pqcSigningKey column to contacts for ML-DSA-65 post-quantum authentication. */
+    private val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE contacts ADD COLUMN pqcSigningKey BLOB NOT NULL DEFAULT x''")
+        }
+    }
+
     /** v5→v6: add unique index on conversations.contactId to prevent duplicate rows per contact. */
     private val MIGRATION_5_6 = object : Migration(5, 6) {
         override fun migrate(db: SupportSQLiteDatabase) {
@@ -108,7 +115,7 @@ object DatabaseModule {
             DB_NAME,
         )
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             .fallbackToDestructiveMigration()
             .build()
     }
