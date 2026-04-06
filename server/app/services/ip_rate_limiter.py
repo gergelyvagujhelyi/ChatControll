@@ -22,6 +22,9 @@ from fastapi import HTTPException, Request
 from app.config import TRUSTED_PROXIES
 
 _WORKER_COUNT = max(1, int(os.getenv("UVICORN_WORKERS", "1")))
+# Integer division rounds down intentionally — the effective global limit
+# (per-worker * workers) is slightly below the configured value, which is
+# conservative.  E.g. 30 // 4 = 7 per worker → 28 effective vs 30 configured.
 IP_RATE_LIMIT = max(1, int(os.getenv("IP_RATE_LIMIT", "30")) // _WORKER_COUNT)
 IP_RATE_WINDOW = 60  # seconds
 
