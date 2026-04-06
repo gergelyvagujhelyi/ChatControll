@@ -40,6 +40,7 @@ class KeyRotationRequest(BaseModel):
     pqc_encapsulation_key: Optional[str] = Field(None, max_length=8192)
     pqc_signing_key: Optional[str] = Field(None, max_length=8192)
     new_key_proof: str = Field(..., max_length=512, description="Signature of the new public_signing_key by the new private key (proof of possession)")
+    pqc_key_proof: str = Field("", max_length=4608, description="ML-DSA-65 signature of the new pqc_signing_key by the new ML-DSA private key (proof of possession)")
 
 
 class SendMessageRequest(BaseModel):

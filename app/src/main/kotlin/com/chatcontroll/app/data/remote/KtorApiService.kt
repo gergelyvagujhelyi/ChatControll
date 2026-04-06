@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.remote
 
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.data.remote.dto.AckRequest
 import com.chatcontroll.app.data.remote.dto.BootstrapRequest
 import com.chatcontroll.app.data.remote.dto.BootstrapResponse
@@ -54,6 +55,7 @@ import javax.inject.Singleton
 @Singleton
 class KtorApiService @Inject constructor(
     private val keyManager: KeyManager,
+    private val pqcProvider: PqcProvider,
 ) : ApiService, java.io.Closeable {
 
     private val client = HttpClient(OkHttp) {
@@ -90,15 +92,28 @@ class KtorApiService @Inject constructor(
         keyManager.getUserId() ?: throw IllegalStateException("No identity — bootstrap first")
 
     /**
-     * Generate a signed auth token: ``<user_id>.<timestamp_ms>.<signature_b64>``
+     * Generate a dual-signed auth token:
+     * ``<user_id>.<timestamp_ms>.<ed25519_sig>[.<mldsa_sig>]``
      */
     private fun authToken(): String {
         val uid = userId()
         val ts = System.currentTimeMillis().toString()
         val payload = "$uid.$ts"
-        val signature = keyManager.sign(payload.toByteArray(Charsets.UTF_8))
+        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+        val signature = keyManager.sign(payloadBytes)
         val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
-        return "$payload.$sigB64"
+        // Append ML-DSA-65 signature if PQC keys are available
+        val pqcSig = try {
+            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    "." + Base64.encodeToString(pqcProvider.sign(payloadBytes, mlDsaPrivKey), Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (_: Exception) { "" }
+        return "$payload.$sigB64$pqcSig"
     }
 
     override suspend fun bootstrapIdentity(request: BootstrapRequest): BootstrapResponse {

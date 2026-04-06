@@ -81,8 +81,8 @@ async def websocket_endpoint(
         token = msg["token"]
 
         # Verify signed auth token against stored public key
-        parts = token.split(".", 2)
-        if len(parts) != 3:
+        parts = token.split(".")
+        if len(parts) < 3 or len(parts) > 4:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})
             )
@@ -91,25 +91,26 @@ async def websocket_endpoint(
 
         claimed_user_id = parts[0]
         result = await db.execute(
-            select(Identity.public_signing_key).where(
+            select(Identity.public_signing_key, Identity.pqc_signing_key).where(
                 Identity.user_id == claimed_user_id
             )
         )
-        pub_key_b64 = result.scalar_one_or_none()
+        row = result.one_or_none()
         # Explicitly close the DB session after auth to release the connection
         # back to the pool. Without this, the session stays open for the entire
         # WebSocket lifetime (potentially hours), exhausting the pool.
         # NOTE: db is unusable after this point — do not add DB operations below.
         await db.close()
-        if pub_key_b64 is None:
+        if row is None:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})
             )
             await websocket.close(code=4003)
             return
+        pub_key_b64, pqc_signing_key_b64 = row
 
         try:
-            user_id = verify_token(token, pub_key_b64)
+            user_id = verify_token(token, pub_key_b64, pqc_signing_key_b64 or "")
         except ValueError as e:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})

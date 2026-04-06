@@ -295,6 +295,15 @@ class IdentityRepositoryImpl @Inject constructor(
         if (newMlDsa != null) {
             keyManager.storeMlDsaKeys(newMlDsa.publicKey, newMlDsa.privateKey)
         }
+        // ML-DSA proof-of-possession: sign the new pqc_signing_key B64 with the new ML-DSA private key
+        val pqcProofB64 = if (newMlDsa != null && newMlDsaB64 != null) {
+            try {
+                Base64.encodeToString(
+                    pqcProvider.sign(newMlDsaB64.toByteArray(Charsets.UTF_8), newMlDsa.privateKey),
+                    Base64.NO_WRAP,
+                )
+            } catch (_: Exception) { "" }
+        } else ""
 
         // Call server (authenticated with the CURRENT signing key via authToken)
         val response = try {
@@ -305,6 +314,7 @@ class IdentityRepositoryImpl @Inject constructor(
                     pqcEncapsulationKey = newPqcB64,
                     pqcSigningKey = newMlDsaB64,
                     newKeyProof = proofB64,
+                    pqcKeyProof = pqcProofB64,
                 )
             )
         } catch (e: Exception) {

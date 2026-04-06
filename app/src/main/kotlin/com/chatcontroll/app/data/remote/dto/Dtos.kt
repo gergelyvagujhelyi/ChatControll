@@ -126,6 +126,7 @@ data class KeyRotationRequest(
     val pqcEncapsulationKey: String? = null,
     val pqcSigningKey: String? = null,
     val newKeyProof: String,
+    val pqcKeyProof: String = "",
 )
 
 @Serializable

@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.remote
 
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
 import com.chatcontroll.app.domain.repository.MessageRepository
 import android.util.Base64
@@ -43,6 +44,7 @@ import javax.inject.Singleton
 @Singleton
 class WebSocketClient @Inject constructor(
     private val keyManager: KeyManager,
+    private val pqcProvider: PqcProvider,
     private val messageRepository: dagger.Lazy<MessageRepository>,
 ) {
     private companion object {
@@ -112,9 +114,20 @@ class WebSocketClient @Inject constructor(
         val uid = keyManager.getUserId() ?: return null
         val ts = System.currentTimeMillis().toString()
         val payload = "$uid.$ts"
-        val signature = keyManager.sign(payload.toByteArray(Charsets.UTF_8))
+        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+        val signature = keyManager.sign(payloadBytes)
         val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
-        return "$payload.$sigB64"
+        val pqcSig = try {
+            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    "." + Base64.encodeToString(pqcProvider.sign(payloadBytes, mlDsaPrivKey), Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (_: Exception) { "" }
+        return "$payload.$sigB64$pqcSig"
     }
 
     private suspend fun connectWebSocket() {
