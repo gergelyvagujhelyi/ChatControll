@@ -256,7 +256,12 @@ class MessageRepositoryImpl @Inject constructor(
                     continue
                 }
                 val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
-                val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+                val sig = try {
+                    Base64.decode(dto.signature, Base64.NO_WRAP)
+                } catch (_: Exception) {
+                    receivedIds.add(dto.messageId)
+                    continue
+                }
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
@@ -571,18 +576,30 @@ class MessageRepositoryImpl @Inject constructor(
             existingContact?.publicIdentityKey
         }
 
-        // Reject unsigned or unverifiable control messages — never allow
-        // session teardown without a verified signature (mirrors CallManager).
-        if (dto.signature.isEmpty() || pubSignKey == null) {
+        // Reject unsigned control messages permanently — no signature is
+        // never valid, so ACK to remove from the pending queue.
+        if (dto.signature.isEmpty()) {
             if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
-                "Rejecting $ctrl from ${dto.senderId.take(8)}: " +
-                    if (dto.signature.isEmpty()) "unsigned" else "no signing key available")
+                "Rejecting unsigned $ctrl from ${dto.senderId.take(8)}")
             receivedIds.add(dto.messageId)
             return true
         }
 
+        // If the signing key is unavailable (transient network error on key
+        // fetch), skip without ACKing so the message is retried on next sync.
+        if (pubSignKey == null) {
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                "Postponing $ctrl from ${dto.senderId.take(8)}: no signing key available")
+            return true
+        }
+
         val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
-        val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+        val sig = try {
+            Base64.decode(dto.signature, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            receivedIds.add(dto.messageId)
+            return true
+        }
         val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
         if (!valid) {
             if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
