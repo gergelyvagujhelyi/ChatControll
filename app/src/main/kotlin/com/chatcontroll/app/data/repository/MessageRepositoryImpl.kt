@@ -573,19 +573,24 @@ class MessageRepositoryImpl @Inject constructor(
                     return true
                 }
 
-                // Update the contact's stored keys to the new ones
+                // Update the contact's stored keys to the new ones.
+                // Reset pqcEstablished so the classical-only re-establish
+                // isn't rejected by the PQC downgrade guard.
                 val existingContact = contactDao.getByUserId(dto.senderId)
                 if (existingContact != null && pubIdKey != null) {
                     contactDao.upsert(existingContact.copy(
                         publicSigningKey = pubSignKey,
                         publicIdentityKey = pubIdKey,
+                        pqcEstablished = false,
                     ))
                 }
             }
         }
 
-        // Clear stale session for this peer
+        // Clear stale session for this peer (both persisted and in-memory ratchet state)
+        val staleSessionId = keyManager.getCachedSessionKeys(dto.senderId)?.sessionId
         keyManager.clearSessionForPeer(dto.senderId)
+        if (staleSessionId != null) cryptoEngine.clearSession(staleSessionId)
 
         // Mark conversation as needing session re-establishment
         conversationDao.setNeedsSessionReset(dto.senderId, true)
@@ -598,8 +603,10 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     override suspend fun reEstablishSession(contactId: String) {
-        // Clear old session state
+        // Clear old session state (both persisted and in-memory ratchet state)
+        val oldSessionId = keyManager.getCachedSessionKeys(contactId)?.sessionId
         keyManager.clearSessionForPeer(contactId)
+        if (oldSessionId != null) cryptoEngine.clearSession(oldSessionId)
 
         // Fetch fresh key bundle and establish new session
         val sessionKeys = tryEstablishSession(contactId)

@@ -34,6 +34,9 @@ interface CryptoEngine {
     /** Verify a signature against a public signing key. */
     suspend fun verify(data: ByteArray, signature: ByteArray, publicSigningKey: ByteArray): Boolean
 
+    /** Remove the in-memory ratchet state for a session (e.g. after key rotation). */
+    suspend fun clearSession(sessionId: String) {}
+
     /** Derive a deterministic share code from the public identity key. */
     fun deriveShareCode(publicIdentityKey: ByteArray): String
 }

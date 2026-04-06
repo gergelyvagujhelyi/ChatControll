@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.repository
 
 import android.util.Base64
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.SessionResetSender
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.entity.ContactEntity
 import com.chatcontroll.app.data.remote.ApiService
@@ -16,6 +17,7 @@ import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.repository.PublicKeyBundle
 import com.chatcontroll.app.domain.repository.SessionKeys
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
@@ -29,6 +31,7 @@ class IdentityRepositoryImpl @Inject constructor(
     private val keyManager: KeyManager,
     private val apiService: ApiService,
     private val contactDao: ContactDao,
+    private val sessionResetSender: SessionResetSender,
 ) : IdentityRepository {
 
     override suspend fun hasIdentity(): Boolean = keyManager.hasIdentity()
@@ -268,6 +271,17 @@ class IdentityRepositoryImpl @Inject constructor(
         keyManager.clearSessionCache()
         (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
             ?.clearAllSessions()
+
+        // Notify all contacts that our keys rotated so they can re-establish.
+        // Best-effort — don't fail rotation if a notification can't be delivered.
+        try {
+            val contacts = contactDao.getAll().first()
+            for (contact in contacts) {
+                try {
+                    sessionResetSender.send(contact.userId)
+                } catch (_: Exception) { /* best effort */ }
+            }
+        } catch (_: Exception) { /* best effort */ }
     }
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {
