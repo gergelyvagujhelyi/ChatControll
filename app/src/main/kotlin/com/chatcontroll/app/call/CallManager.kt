@@ -26,6 +26,7 @@ import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.SessionKeys
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -85,7 +86,7 @@ class CallManager @Inject constructor(
     @Volatile
     private var remoteDescriptionSet = false
     /** Per-call cache of derived session keys — cleared in endCall(). */
-    private val _callSessionKeys = mutableMapOf<String, SessionKeys>()
+    private val _callSessionKeys = ConcurrentHashMap<String, SessionKeys>()
     /** Track seen signal signatures with timestamps to reject replays.
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
      *  Insertion order (accessOrder=false) so time-based eviction is correct. */
@@ -201,9 +202,11 @@ class CallManager @Inject constructor(
 
                 // Reject replayed signals (same signature = same signal)
                 val now = System.currentTimeMillis()
-                // Evict all expired entries — do not break early because
-                // capacity-based eviction can disrupt chronological order.
-                seenSignalSignatures.entries.removeAll { now - it.value > SIGNATURE_TTL_MS }
+                // Evict expired entries via iterator to avoid ConcurrentModificationException.
+                val iter = seenSignalSignatures.entries.iterator()
+                while (iter.hasNext()) {
+                    if (now - iter.next().value > SIGNATURE_TTL_MS) iter.remove()
+                }
                 if (seenSignalSignatures.containsKey(signal.signature)) {
                     logDebug("Rejecting replayed call signal")
                     return@launch
@@ -467,14 +470,19 @@ class CallManager @Inject constructor(
         webRtcEngine = null
         _pendingOfferPayload = null
         // Clear _pendingNewContact under signalMutex to stay consistent with
-        // acceptCall() and handleIncomingSignal(). Use tryLock because endCall()
-        // is non-suspending and always runs on Main — if the mutex is held by a
-        // signal handler, the @Volatile write still guarantees visibility.
-        if (signalMutex.tryLock()) {
-            _pendingNewContact = null
-            signalMutex.unlock()
-        } else {
-            _pendingNewContact = null
+        // acceptCall() and handleIncomingSignal(). Launch a coroutine so we
+        // can properly acquire the suspending Mutex instead of using tryLock,
+        // which would race with signal handlers reading the field under lock.
+        // Snapshot the reference so a rapid back-to-back call that sets a NEW
+        // _pendingNewContact between now and when the coroutine runs is not
+        // accidentally clobbered.
+        val contactToClear = _pendingNewContact
+        scope.launch {
+            signalMutex.withLock {
+                if (_pendingNewContact === contactToClear) {
+                    _pendingNewContact = null
+                }
+            }
         }
         pendingIceCandidates.clear()
         remoteDescriptionSet = false
@@ -906,11 +914,15 @@ class CallManager @Inject constructor(
         val parts = encrypted.split('.', limit = 2)
         val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
         val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
-        val result = String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        callKey.fill(0)
-        return result
+        try {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
+            return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        } finally {
+            callKey.fill(0)
+            nonce.fill(0)
+            ciphertext.fill(0)
+        }
     }
 
     private fun requestAudioFocus() {

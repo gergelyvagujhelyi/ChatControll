@@ -195,6 +195,7 @@ class WebRtcEngine(context: Context) {
         }
     }
 
+    @Synchronized
     private fun setupReceiverFrameCryptor(receiver: RtpReceiver) {
         if (receiverFrameCryptor != null) return
         val kp = keyProvider ?: return
@@ -216,6 +217,7 @@ class WebRtcEngine(context: Context) {
         localAudioTrack?.setEnabled(enabled)
     }
 
+    @Synchronized
     fun dispose() {
         senderFrameCryptor?.dispose()
         receiverFrameCryptor?.dispose()

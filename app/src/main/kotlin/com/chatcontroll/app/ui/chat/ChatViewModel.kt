@@ -9,6 +9,7 @@ import com.chatcontroll.app.domain.repository.ConversationRepository
 import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.usecase.SendMessageUseCase
 import com.chatcontroll.app.domain.repository.MessageRepository
+import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -74,7 +75,9 @@ class ChatViewModel @Inject constructor(
             while (true) {
                 try {
                     messageRepository.fetchPendingFromServer()
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    Log.w("ChatViewModel", "Periodic message fetch failed: ${e.message}")
+                }
                 kotlinx.coroutines.delay(15_000)
             }
         }

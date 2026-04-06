@@ -63,6 +63,7 @@ class WebSocketClient @Inject constructor(
     val incomingCallSignals: SharedFlow<CallSignalDto> = _incomingCallSignals.asSharedFlow()
 
     private var connectionJob: Job? = null
+    @Volatile
     private var reconnectDelay = INITIAL_RECONNECT_DELAY
 
     @Synchronized
