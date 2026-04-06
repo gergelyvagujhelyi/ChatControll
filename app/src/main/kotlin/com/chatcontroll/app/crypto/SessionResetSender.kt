@@ -24,6 +24,12 @@ class SessionResetSender @Inject constructor(
      */
     suspend fun send(recipientId: String, ctrl: String = CTRL_SESSION_RESET) {
         val senderId = keyManager.getUserId() ?: return
+        // NOTE: The control type is visible in the nonce field (Base64-encoded).
+        // The relay server operator can detect session_reset / account_deleted
+        // events. This is a known trade-off: control messages are sent when
+        // sessions are broken, so they cannot be encrypted with session keys.
+        // Encrypting with the recipient's identity key would add complexity
+        // without meaningful privacy gain (the server already sees sender/recipient).
         val controlPayload = """{"ctrl":"$ctrl"}"""
         val nonceBytes = controlPayload.toByteArray(Charsets.UTF_8)
         val bodyBytes = ByteArray(0)

@@ -49,15 +49,21 @@ async def send_message(
     if not await check_rate_limit(db, x_user_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    # Verify recipient exists (keep result for FCM token later)
+    # Lock the recipient's Identity row to serialize concurrent inserts.
+    # This prevents the TOCTOU race where two requests both pass the count
+    # check before either inserts, bypassing MAX_PENDING_MESSAGES_PER_USER.
+    # On SQLite (single-writer), this is a no-op; on PostgreSQL, FOR UPDATE
+    # serializes concurrent senders targeting the same recipient.
     recipient_result = await db.execute(
-        select(Identity).where(Identity.user_id == request.recipient_id)
+        select(Identity)
+        .where(Identity.user_id == request.recipient_id)
+        .with_for_update()
     )
     recipient = recipient_result.scalar_one_or_none()
     if recipient is None:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
-    # Check pending queue depth
+    # Check pending queue depth (safe from TOCTOU — Identity row is locked)
     count_result = await db.execute(
         select(func.count(PendingMessage.id))
         .where(PendingMessage.recipient_id == request.recipient_id)

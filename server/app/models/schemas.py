@@ -1,6 +1,6 @@
 """Pydantic request/response schemas matching the Android client DTOs."""
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -62,7 +62,7 @@ class PendingMessageResponse(BaseModel):
 
 
 class AckRequest(BaseModel):
-    message_ids: List[str] = Field(..., max_length=1000)
+    message_ids: List[Annotated[str, Field(max_length=64)]] = Field(..., max_length=1000)
 
 
 class PushTokenRequest(BaseModel):
@@ -77,7 +77,7 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.3.4"
+    version: str = "0.3.5"
 
 
 class CallSignalRequest(BaseModel):

@@ -253,7 +253,20 @@ class MessageRepositoryImpl @Inject constructor(
             if (sessionKeys == null || (kemCiphertext != null && !sessionKeys.pqcEstablished)) {
                 sessionKeys = tryEstablishSession(dto.senderId, kemCiphertext)
             }
-            if (sessionKeys == null) continue
+            if (sessionKeys == null) {
+                // If KEM ciphertext was present (peer expects PQC) but session
+                // establishment failed, reject rather than silently downgrading.
+                if (kemCiphertext != null) {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "Rejecting message with KEM ciphertext: PQC session establishment failed for ${dto.senderId.take(8)}")
+                    storeRejected(dto.messageId, dto.senderId, localUserId, EncryptedEnvelope(
+                        ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
+                        nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
+                    ), dto.timestamp)
+                    receivedIds.add(dto.messageId)
+                }
+                continue
+            }
 
             val envelope = EncryptedEnvelope(
                 ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
@@ -263,45 +276,44 @@ class MessageRepositoryImpl @Inject constructor(
             // Fetch contact once for signature checks and notification display
             var senderContact = contactDao.getByUserId(dto.senderId)
 
-            // Check if signature is required: reject unsigned messages unless
-            // the contact explicitly has signatureRequired=false (legacy contact)
-            if (dto.signature.isEmpty() && (senderContact == null || senderContact.signatureRequired)) {
+            // Reject all unsigned messages — signatures are mandatory.
+            // Legacy contacts with signatureRequired=false are no longer exempt
+            // to prevent impersonation via unsigned message injection.
+            if (dto.signature.isEmpty()) {
                 if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Rejecting unsigned message from ${dto.senderId.take(8)}")
                 storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
                 receivedIds.add(dto.messageId)
                 continue
             }
 
-            // Verify sender signature if present
-            if (dto.signature.isNotEmpty()) {
-                if (senderContact == null) {
-                    // Force session establishment to fetch and save the key bundle
-                    tryEstablishSession(dto.senderId, kemCiphertext)
-                    senderContact = contactDao.getByUserId(dto.senderId)
-                }
-                if (senderContact == null) {
-                    // Cannot verify — reject the message
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
-                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
-                    receivedIds.add(dto.messageId)
-                    continue
-                }
-                val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
-                val sig = try {
-                    Base64.decode(dto.signature, Base64.NO_WRAP)
-                } catch (_: Exception) {
-                    receivedIds.add(dto.messageId)
-                    continue
-                }
-                val valid = cryptoEngine.verify(sigPayload, sig, senderContact.publicSigningKey)
-                if (!valid) {
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
-                    // Don't ACK immediately — leave in pending queue for retry on
-                    // next sync (key rotation race could cause transient failure).
-                    // ACK after MAX_DECRYPT_RETRIES to prevent queue poisoning.
-                    countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
-                    continue
-                }
+            // Verify sender signature (guaranteed non-empty after the check above)
+            if (senderContact == null) {
+                // Force session establishment to fetch and save the key bundle
+                tryEstablishSession(dto.senderId, kemCiphertext)
+                senderContact = contactDao.getByUserId(dto.senderId)
+            }
+            if (senderContact == null) {
+                // Cannot verify — reject the message
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
+                storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
+                receivedIds.add(dto.messageId)
+                continue
+            }
+            val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
+            val sig = try {
+                Base64.decode(dto.signature, Base64.NO_WRAP)
+            } catch (_: Exception) {
+                receivedIds.add(dto.messageId)
+                continue
+            }
+            val valid = cryptoEngine.verify(sigPayload, sig, senderContact.publicSigningKey)
+            if (!valid) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
+                // Don't ACK immediately — leave in pending queue for retry on
+                // next sync (key rotation race could cause transient failure).
+                // ACK after MAX_DECRYPT_RETRIES to prevent queue poisoning.
+                countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
+                continue
             }
 
             val peerMutex = peerLocks.computeIfAbsent(dto.senderId) { kotlinx.coroutines.sync.Mutex() }

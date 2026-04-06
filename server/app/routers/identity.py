@@ -6,6 +6,7 @@ private keys or any personally identifiable information.
 
 import base64
 import hashlib
+import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -168,7 +169,10 @@ async def rotate_keys(
             if not isinstance(new_pub_key, Ed25519PublicKey):
                 raise ValueError("Not an Ed25519 key")
         new_pub_key.verify(proof_sig, request.public_signing_key.encode("utf-8"))
-    except (InvalidSignature, Exception):
+    except InvalidSignature:
+        raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
+    except (ValueError, TypeError) as e:
+        logging.getLogger(__name__).warning("Key proof validation error: %s", e)
         raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
 
     result = await db.execute(
@@ -183,10 +187,17 @@ async def rotate_keys(
     if request.pqc_encapsulation_key is not None:
         identity.pqc_encapsulation_key = request.pqc_encapsulation_key
 
-    # Recompute share code from new identity key
+    # Recompute share code from new identity key.
+    # Collision is caught by IntegrityError on commit (if a unique constraint
+    # exists) — no pre-check needed since 96-bit collisions are astronomically
+    # rare and the pre-check itself has a TOCTOU window.
     identity.share_code = _derive_share_code(request.public_identity_key)
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Share code collision — retry with different keys")
     return {"status": "ok", "share_code": identity.share_code}
 
 

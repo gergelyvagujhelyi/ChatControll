@@ -91,7 +91,7 @@ class ChatNotificationManager @Inject constructor(
             }
         }
 
-        val notificationId = conversationId?.hashCode() ?: senderId.hashCode()
+        val notificationId = (conversationId?.hashCode() ?: senderId.hashCode()) and Int.MAX_VALUE
 
         val pendingIntent = PendingIntent.getActivity(
             context,

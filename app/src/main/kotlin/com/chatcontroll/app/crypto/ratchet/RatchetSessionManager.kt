@@ -83,7 +83,11 @@ class RatchetSessionManager @Inject constructor(
             // The remote party encapsulated — failure must not be swallowed.
             val decapsulationKey = keyManager.getPqcDecapsulationKey()
                 ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
-            pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
+            try {
+                pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
+            } finally {
+                decapsulationKey.fill(0)
+            }
         } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
             // Encapsulate against the remote's ML-KEM public key.
             // If the remote advertises PQC, encapsulation MUST succeed —
@@ -93,8 +97,17 @@ class RatchetSessionManager @Inject constructor(
             kemCiphertext = encapsulation.ciphertext
         }
 
-        // Combine classical + PQC secrets via HKDF
-        val ikm = if (pqcSecret.isNotEmpty()) classicalSecret + pqcSecret else classicalSecret
+        // Capture PQC status before zeroization — .isNotEmpty() checks .size
+        // which survives .fill(0), but capturing the flag is more robust.
+        val isPqcEstablished = pqcSecret.isNotEmpty()
+
+        // Combine classical + PQC secrets via HKDF, then zeroize inputs
+        // In the PQC path, `+` creates a new array so classicalSecret can be
+        // zeroized independently. In the classical-only path, copyOf() is needed
+        // to avoid aliasing — without it, classicalSecret.fill(0) zeroes ikm.
+        val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
+        classicalSecret.fill(0)
+        if (isPqcEstablished) pqcSecret.fill(0)
 
         val sharedSecret = hkdfSha256(
             ikm = ikm,
@@ -102,6 +115,7 @@ class RatchetSessionManager @Inject constructor(
             info = "hybrid-key-establishment".toByteArray(),
             length = 32,
         )
+        ikm.fill(0)
 
         // Sort keys so both peers compute the same sessionId regardless of role
         val localHex = localIdentity.publicIdentityKey.toHex()
@@ -122,6 +136,7 @@ class RatchetSessionManager @Inject constructor(
         )
         val chainA = chainMaterial.copyOfRange(0, 32)
         val chainB = chainMaterial.copyOfRange(32, 64)
+        chainMaterial.fill(0)
 
         val dhKeyPair = DhKeyPair(
             publicKey = localIdentity.publicIdentityKey,
@@ -135,7 +150,7 @@ class RatchetSessionManager @Inject constructor(
             sendingChainKey = ChainKey(if (isInitiator) chainA else chainB, 0),
             receivingChainKey = ChainKey(if (isInitiator) chainB else chainA, 0),
             pendingKemCiphertext = kemCiphertext,
-            pqcEstablished = pqcSecret.isNotEmpty(),
+            pqcEstablished = isPqcEstablished,
         )
 
         sessionsMutex.withLock {
@@ -147,7 +162,7 @@ class RatchetSessionManager @Inject constructor(
             sendKey = if (isInitiator) chainA else chainB,
             receiveKey = if (isInitiator) chainB else chainA,
             sessionId = sessionId,
-            pqcEstablished = pqcSecret.isNotEmpty(),
+            pqcEstablished = isPqcEstablished,
         )
     }
 
@@ -172,15 +187,14 @@ class RatchetSessionManager @Inject constructor(
             try {
                 persistSession(sessionKeys.sessionId, state)
             } catch (e: Exception) {
-                // ratchet.encrypt() mutated state in-place. On persistence
-                // failure, rollback in-memory state to match disk — same
-                // pattern as decrypt.
-                val restored = loadPersistedSession(sessionKeys.sessionId)
-                if (restored != null) {
-                    sessions[sessionKeys.sessionId] = restored
-                } else {
-                    sessions.remove(sessionKeys.sessionId)
-                }
+                // Persistence failed after ratchet.encrypt() mutated state.
+                // We MUST NOT rollback to a prior state — the chain has advanced
+                // and message keys have been consumed. Restoring an older state
+                // would reuse the same key+nonce on the next encrypt(), which
+                // catastrophically breaks AES-GCM (enables key recovery).
+                // Instead, invalidate the session so the caller re-establishes.
+                sessions.remove(sessionKeys.sessionId)
+                keyManager.removeRatchetState(sessionKeys.sessionId)
                 throw e
             }
 
@@ -203,6 +217,12 @@ class RatchetSessionManager @Inject constructor(
 
             val headerJson = String(envelope.nonce, Charsets.UTF_8)
             val header = json.decodeFromString<RatchetHeader>(headerJson)
+
+            // Validate header fields from untrusted input to prevent abuse
+            require(header.messageNumber >= 0) { "Negative messageNumber in ratchet header" }
+            require(header.previousChainLength >= 0) { "Negative previousChainLength in ratchet header" }
+            require(header.publicKey.isNotEmpty()) { "Empty publicKey in ratchet header" }
+
             // Strip kemCiphertext for AAD: the ciphertext was sealed with the
             // original header (kemCiphertext=null) before it was attached.
             val headerForAad = header.copy(kemCiphertext = null)
@@ -212,16 +232,11 @@ class RatchetSessionManager @Inject constructor(
                 persistSession(sessionKeys.sessionId, state)
                 plaintext
             } catch (e: Exception) {
-                // ratchet.decrypt() mutates state in-place (DH ratchet step, skip keys).
-                // On ANY failure (decrypt or persistence), rollback in-memory state to
-                // match disk — prevents replay if persistence failed after decrypt, and
-                // prevents state desync if decrypt itself failed.
-                val restored = loadPersistedSession(sessionKeys.sessionId)
-                if (restored != null) {
-                    sessions[sessionKeys.sessionId] = restored
-                } else {
-                    sessions.remove(sessionKeys.sessionId)
-                }
+                // Same reasoning as encrypt: ratchet.decrypt() consumes keys
+                // (DH ratchet step, skip keys). Restoring a prior state would
+                // allow message replay or key reuse. Invalidate the session.
+                sessions.remove(sessionKeys.sessionId)
+                keyManager.removeRatchetState(sessionKeys.sessionId)
                 throw e
             }
         }

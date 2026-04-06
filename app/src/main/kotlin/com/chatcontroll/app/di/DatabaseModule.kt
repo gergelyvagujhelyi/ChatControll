@@ -42,7 +42,7 @@ object DatabaseModule {
                 it.openHelper.writableDatabase
             }
         } catch (e: Exception) {
-            if (BuildConfig.DEBUG) Log.w("DatabaseModule", "Database unreadable, deleting and recreating", e)
+            Log.e("DatabaseModule", "Database unreadable (key mismatch or corruption), deleting and recreating", e)
             context.deleteDatabase(DB_NAME)
             databaseWasReset = true
             buildDatabase(context, factory)
