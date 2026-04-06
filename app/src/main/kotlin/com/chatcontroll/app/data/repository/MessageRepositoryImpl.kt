@@ -571,27 +571,35 @@ class MessageRepositoryImpl @Inject constructor(
             existingContact?.publicIdentityKey
         }
 
-        if (pubSignKey != null && dto.signature.isNotEmpty()) {
-            val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
-            val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
-            val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
-            if (!valid) {
-                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
-                    "$ctrl signature invalid from ${dto.senderId.take(8)}")
-                receivedIds.add(dto.messageId)
-                return true
-            }
+        // Reject unsigned or unverifiable control messages — never allow
+        // session teardown without a verified signature (mirrors CallManager).
+        if (dto.signature.isEmpty() || pubSignKey == null) {
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                "Rejecting $ctrl from ${dto.senderId.take(8)}: " +
+                    if (dto.signature.isEmpty()) "unsigned" else "no signing key available")
+            receivedIds.add(dto.messageId)
+            return true
+        }
 
-            if (!isAccountDeleted && existingContact != null && pubIdKey != null) {
-                // Update the contact's stored keys to the new ones.
-                // Reset pqcEstablished so the classical-only re-establish
-                // isn't rejected by the PQC downgrade guard.
-                contactDao.upsert(existingContact.copy(
-                    publicSigningKey = pubSignKey,
-                    publicIdentityKey = pubIdKey,
-                    pqcEstablished = false,
-                ))
-            }
+        val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, nonceBytes, ByteArray(0))
+        val sig = Base64.decode(dto.signature, Base64.NO_WRAP)
+        val valid = cryptoEngine.verify(sigPayload, sig, pubSignKey)
+        if (!valid) {
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                "$ctrl signature invalid from ${dto.senderId.take(8)}")
+            receivedIds.add(dto.messageId)
+            return true
+        }
+
+        if (!isAccountDeleted && existingContact != null && pubIdKey != null) {
+            // Update the contact's stored keys to the new ones.
+            // Reset pqcEstablished so the classical-only re-establish
+            // isn't rejected by the PQC downgrade guard.
+            contactDao.upsert(existingContact.copy(
+                publicSigningKey = pubSignKey,
+                publicIdentityKey = pubIdKey,
+                pqcEstablished = false,
+            ))
         }
 
         // Clear stale session for this peer (both persisted and in-memory ratchet state)
