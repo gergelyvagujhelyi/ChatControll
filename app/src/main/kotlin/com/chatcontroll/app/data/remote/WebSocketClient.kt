@@ -53,10 +53,14 @@ class WebSocketClient @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val client = HttpClient(OkHttp) {
-        install(WebSockets) {
-            pingIntervalMillis = 30_000
-        }
+    private var client: HttpClient? = null
+
+    private fun getOrCreateClient(): HttpClient {
+        return client ?: HttpClient(OkHttp) {
+            install(WebSockets) {
+                pingIntervalMillis = 30_000
+            }
+        }.also { client = it }
     }
 
     private val _incomingCallSignals = MutableSharedFlow<CallSignalDto>(extraBufferCapacity = 16)
@@ -105,7 +109,8 @@ class WebSocketClient @Inject constructor(
         connectionJob?.cancel()
         connectionJob = null
         reconnectDelay = INITIAL_RECONNECT_DELAY
-        client.close()
+        client?.close()
+        client = null
     }
 
     private fun generateAuthToken(): String? {
@@ -125,7 +130,7 @@ class WebSocketClient @Inject constructor(
             "ws://" + BuildConfig.API_BASE_URL.removePrefix("http://")
         }
 
-        client.webSocket("$baseUrl/v1/ws") {
+        getOrCreateClient().webSocket("$baseUrl/v1/ws") {
             // Authenticate with signed token
             send(buildJsonObject {
                 put("type", "auth")

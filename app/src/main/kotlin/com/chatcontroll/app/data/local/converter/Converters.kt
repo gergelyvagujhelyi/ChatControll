@@ -14,8 +14,9 @@ class Converters {
         return try {
             Base64.decode(value, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
+            // Always log — corrupted DB data should be visible in production too
             android.util.Log.e("Converters", "Corrupted Base64 in database column", e)
-            throw IllegalStateException("Database contains corrupted Base64 data", e)
+            ByteArray(0)
         }
     }
 }
