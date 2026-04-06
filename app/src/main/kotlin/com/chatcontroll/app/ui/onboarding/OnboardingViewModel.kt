@@ -2,6 +2,7 @@ package com.chatcontroll.app.ui.onboarding
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.chatcontroll.app.data.remote.WebSocketClient
 import com.chatcontroll.app.domain.model.Identity
 import com.chatcontroll.app.domain.model.KeyType
 import com.chatcontroll.app.domain.usecase.CreateIdentityUseCase
@@ -15,6 +16,7 @@ import javax.inject.Inject
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val createIdentity: CreateIdentityUseCase,
+    private val webSocketClient: WebSocketClient,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<OnboardingState>(OnboardingState.Welcome)
@@ -40,6 +42,10 @@ class OnboardingViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val identity = createIdentity(selectedKeyType)
+                // Identity is now available — force WebSocket reconnect so
+                // real-time delivery (messages, call signals) starts immediately
+                // instead of waiting for the backoff timer to expire.
+                webSocketClient.ensureConnected()
                 _state.value = OnboardingState.Complete(identity)
             } catch (e: Exception) {
                 _state.value = OnboardingState.Error("Failed to create identity. Please try again.")
