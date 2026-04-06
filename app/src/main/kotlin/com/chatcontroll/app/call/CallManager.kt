@@ -929,7 +929,10 @@ class CallManager @Inject constructor(
         try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
-            return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            val plaintext = cipher.doFinal(ciphertext)
+            val result = String(plaintext, Charsets.UTF_8)
+            plaintext.fill(0)
+            return result
         } finally {
             callKey.fill(0)
             nonce.fill(0)
