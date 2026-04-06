@@ -318,9 +318,15 @@ class IdentityRepositoryImpl @Inject constructor(
 
                 try {
                     sessionResetSender.send(contact.userId)
-                } catch (_: Exception) { /* best effort */ }
+                } catch (e: Exception) {
+                    android.util.Log.w("IdentityRepo",
+                        "Failed to send session_reset to ${contact.userId.take(8)}: ${e.message}")
+                }
             }
-        } catch (_: Exception) { /* best effort */ }
+        } catch (e: Exception) {
+            android.util.Log.w("IdentityRepo",
+                "Failed to notify contacts of key rotation: ${e.message}")
+        }
     }
 
     override suspend fun fetchKeyBundle(userId: String): Contact? {

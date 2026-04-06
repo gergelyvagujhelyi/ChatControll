@@ -6,8 +6,9 @@ Uses a simple sliding-window counter per IP address with periodic cleanup.
 WARNING: This rate limiter is per-process and stored in memory only.
 In multi-worker deployments (e.g. multiple uvicorn workers), each worker
 maintains its own counters, effectively multiplying the allowed rate by
-the number of workers. For multi-worker setups, use a shared store
-(Redis, database) instead.
+the number of workers. To compensate, the per-worker limit is divided by
+the number of workers (set via UVICORN_WORKERS env var, default 1).
+For large-scale setups, use a shared store (Redis, database) instead.
 """
 
 import asyncio
@@ -20,7 +21,8 @@ from fastapi import HTTPException, Request
 
 from app.config import TRUSTED_PROXIES
 
-IP_RATE_LIMIT = int(os.getenv("IP_RATE_LIMIT", "30"))
+_WORKER_COUNT = max(1, int(os.getenv("UVICORN_WORKERS", "1")))
+IP_RATE_LIMIT = int(os.getenv("IP_RATE_LIMIT", "30")) // _WORKER_COUNT or 1
 IP_RATE_WINDOW = 60  # seconds
 
 

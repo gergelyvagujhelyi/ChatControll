@@ -69,6 +69,10 @@ class KeyManager @Inject constructor(
         return encryptedPrefs.getString(KEY_PQC_ENCAPSULATION, null)?.hexToBytes()
     }
 
+    /**
+     * Returns the PQC decapsulation key. Caller MUST zeroize the returned
+     * array after use via `fill(0)` to limit key material lifetime in memory.
+     */
     fun getPqcDecapsulationKey(): ByteArray? {
         return encryptedPrefs.getString(KEY_PQC_DECAPSULATION, null)?.hexToBytes()
     }
@@ -195,12 +199,16 @@ class KeyManager @Inject constructor(
     fun sign(data: ByteArray): ByteArray {
         val privKeyBytes = encryptedPrefs.getString(KEY_PRIVATE_SIGNING, null)?.hexToBytes()
             ?: throw IllegalStateException("No signing key available")
-        val kf = java.security.KeyFactory.getInstance("Ed25519", "BC")
-        val privKey = kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privKeyBytes))
-        val sig = Signature.getInstance("Ed25519", "BC")
-        sig.initSign(privKey)
-        sig.update(data)
-        return sig.sign()
+        try {
+            val kf = java.security.KeyFactory.getInstance("Ed25519", "BC")
+            val privKey = kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privKeyBytes))
+            val sig = Signature.getInstance("Ed25519", "BC")
+            sig.initSign(privKey)
+            sig.update(data)
+            return sig.sign()
+        } finally {
+            privKeyBytes.fill(0)
+        }
     }
 
     fun saveRatchetState(sessionId: String, serialized: String) {

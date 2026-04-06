@@ -83,7 +83,11 @@ class RatchetSessionManager @Inject constructor(
             // The remote party encapsulated — failure must not be swallowed.
             val decapsulationKey = keyManager.getPqcDecapsulationKey()
                 ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
-            pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
+            try {
+                pqcSecret = pqcProvider.decapsulate(inboundKemCiphertext, decapsulationKey)
+            } finally {
+                decapsulationKey.fill(0)
+            }
         } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
             // Encapsulate against the remote's ML-KEM public key.
             // If the remote advertises PQC, encapsulation MUST succeed —
@@ -93,8 +97,10 @@ class RatchetSessionManager @Inject constructor(
             kemCiphertext = encapsulation.ciphertext
         }
 
-        // Combine classical + PQC secrets via HKDF
+        // Combine classical + PQC secrets via HKDF, then zeroize inputs
         val ikm = if (pqcSecret.isNotEmpty()) classicalSecret + pqcSecret else classicalSecret
+        classicalSecret.fill(0)
+        if (pqcSecret.isNotEmpty()) pqcSecret.fill(0)
 
         val sharedSecret = hkdfSha256(
             ikm = ikm,
@@ -102,6 +108,7 @@ class RatchetSessionManager @Inject constructor(
             info = "hybrid-key-establishment".toByteArray(),
             length = 32,
         )
+        ikm.fill(0)
 
         // Sort keys so both peers compute the same sessionId regardless of role
         val localHex = localIdentity.publicIdentityKey.toHex()
@@ -156,6 +163,10 @@ class RatchetSessionManager @Inject constructor(
             val state = getOrLoadSession(sessionKeys.sessionId)
                 ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
+            // Snapshot persisted state before mutation so we can always
+            // rollback to a known-good state if anything fails.
+            val snapshot = loadPersistedSession(sessionKeys.sessionId)
+
             val (header, ciphertext) = ratchet.encrypt(state, plaintext)
 
             // Attach PQC KEM ciphertext to the first outbound message header
@@ -172,12 +183,10 @@ class RatchetSessionManager @Inject constructor(
             try {
                 persistSession(sessionKeys.sessionId, state)
             } catch (e: Exception) {
-                // ratchet.encrypt() mutated state in-place. On persistence
-                // failure, rollback in-memory state to match disk — same
-                // pattern as decrypt.
-                val restored = loadPersistedSession(sessionKeys.sessionId)
-                if (restored != null) {
-                    sessions[sessionKeys.sessionId] = restored
+                // Rollback to the pre-mutation snapshot (loaded before encrypt)
+                // instead of re-reading from disk, which could itself fail.
+                if (snapshot != null) {
+                    sessions[sessionKeys.sessionId] = snapshot
                 } else {
                     sessions.remove(sessionKeys.sessionId)
                 }
@@ -201,8 +210,17 @@ class RatchetSessionManager @Inject constructor(
             val state = getOrLoadSession(sessionKeys.sessionId)
                 ?: throw IllegalStateException("No ratchet session for ${sessionKeys.sessionId}")
 
+            // Snapshot persisted state before mutation for reliable rollback.
+            val snapshot = loadPersistedSession(sessionKeys.sessionId)
+
             val headerJson = String(envelope.nonce, Charsets.UTF_8)
             val header = json.decodeFromString<RatchetHeader>(headerJson)
+
+            // Validate header fields from untrusted input to prevent abuse
+            require(header.messageNumber >= 0) { "Negative messageNumber in ratchet header" }
+            require(header.previousChainLength >= 0) { "Negative previousChainLength in ratchet header" }
+            require(header.publicKey.isNotEmpty()) { "Empty publicKey in ratchet header" }
+
             // Strip kemCiphertext for AAD: the ciphertext was sealed with the
             // original header (kemCiphertext=null) before it was attached.
             val headerForAad = header.copy(kemCiphertext = null)
@@ -212,13 +230,10 @@ class RatchetSessionManager @Inject constructor(
                 persistSession(sessionKeys.sessionId, state)
                 plaintext
             } catch (e: Exception) {
-                // ratchet.decrypt() mutates state in-place (DH ratchet step, skip keys).
-                // On ANY failure (decrypt or persistence), rollback in-memory state to
-                // match disk — prevents replay if persistence failed after decrypt, and
-                // prevents state desync if decrypt itself failed.
-                val restored = loadPersistedSession(sessionKeys.sessionId)
-                if (restored != null) {
-                    sessions[sessionKeys.sessionId] = restored
+                // Rollback to pre-mutation snapshot — avoids re-reading from disk
+                // which could itself fail and leave state as null.
+                if (snapshot != null) {
+                    sessions[sessionKeys.sessionId] = snapshot
                 } else {
                     sessions.remove(sessionKeys.sessionId)
                 }

@@ -96,6 +96,10 @@ async def websocket_endpoint(
             )
         )
         pub_key_b64 = result.scalar_one_or_none()
+        # Explicitly close the DB session after auth to release the connection
+        # back to the pool. Without this, the session stays open for the entire
+        # WebSocket lifetime (potentially hours), exhausting the pool.
+        await db.close()
         if pub_key_b64 is None:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})
