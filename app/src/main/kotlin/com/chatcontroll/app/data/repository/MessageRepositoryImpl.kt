@@ -62,23 +62,20 @@ class MessageRepositoryImpl @Inject constructor(
     }
 
     /**
-     * Evict unlocked peer mutexes and stale tracking entries when maps grow
-     * beyond [PRUNE_THRESHOLD] to prevent unbounded memory growth on
-     * long-lived installs.
+     * Evict stale tracking entries when maps grow beyond [PRUNE_THRESHOLD]
+     * to prevent unbounded memory growth on long-lived installs.
+     *
+     * peerLocks is intentionally not pruned: its size is bounded by the
+     * number of contacts, and removing an "unlocked" mutex races with
+     * threads about to acquire it.
      */
     private fun pruneInMemoryMaps() {
-        if (peerLocks.size > PRUNE_THRESHOLD) {
-            val toRemove = peerLocks.entries
-                .filter { !it.value.isLocked }
-                .map { it.key }
-            toRemove.forEach { peerLocks.remove(it) }
-        }
         if (decryptFailCounts.size > PRUNE_THRESHOLD) {
-            // Evict entries with the highest retry counts first (closest to
-            // being tombstoned) to keep actively-retrying messages intact.
+            // Evict entries with the lowest retry counts first to ensure that
+            // messages nearing the MAX_DECRYPT_RETRIES limit are correctly tombstoned.
             val evictCount = decryptFailCounts.size - PRUNE_THRESHOLD
             decryptFailCounts.entries
-                .sortedByDescending { it.value }
+                .sortedBy { it.value }
                 .take(evictCount)
                 .forEach { decryptFailCounts.remove(it.key) }
         }
