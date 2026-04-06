@@ -117,7 +117,7 @@ class MessageRepositoryImpl @Inject constructor(
         messageDao.insert(entity)
 
         // Serialize ratchet operations per peer to prevent state divergence
-        val peerMutex = peerLocks.getOrPut(recipientId) { kotlinx.coroutines.sync.Mutex() }
+        val peerMutex = peerLocks.computeIfAbsent(recipientId) { kotlinx.coroutines.sync.Mutex() }
         val envelope = try {
             peerMutex.withLock {
                 var sessionKeys = keyManager.getCachedSessionKeys(recipientId)
@@ -178,7 +178,7 @@ class MessageRepositoryImpl @Inject constructor(
         messageDao.updateState(messageId, MessageState.SENDING.name)
 
         // Serialize ratchet operations per peer — same lock used by sendMessage/fetch
-        val peerMutex = peerLocks.getOrPut(entity.recipientId) { kotlinx.coroutines.sync.Mutex() }
+        val peerMutex = peerLocks.computeIfAbsent(entity.recipientId) { kotlinx.coroutines.sync.Mutex() }
         try {
             val envelope = peerMutex.withLock {
                 var sessionKeys = keyManager.getCachedSessionKeys(entity.recipientId)
@@ -302,7 +302,7 @@ class MessageRepositoryImpl @Inject constructor(
                 }
             }
 
-            val peerMutex = peerLocks.getOrPut(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
+            val peerMutex = peerLocks.computeIfAbsent(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
             val plaintext = try {
                 val result = peerMutex.withLock {
                     cryptoEngine.decrypt(sessionKeys, envelope)
