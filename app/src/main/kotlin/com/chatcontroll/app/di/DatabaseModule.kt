@@ -86,7 +86,18 @@ object DatabaseModule {
     /** v6→v7: add pqcSigningKey column to contacts for ML-DSA-65 post-quantum authentication. */
     private val MIGRATION_6_7 = object : Migration(6, 7) {
         override fun migrate(db: SupportSQLiteDatabase) {
-            db.execSQL("ALTER TABLE contacts ADD COLUMN pqcSigningKey BLOB NOT NULL DEFAULT x''")
+            val cursor = db.query("PRAGMA table_info(contacts)")
+            var hasColumn = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "pqcSigningKey") {
+                    hasColumn = true
+                    break
+                }
+            }
+            cursor.close()
+            if (!hasColumn) {
+                db.execSQL("ALTER TABLE contacts ADD COLUMN pqcSigningKey BLOB NOT NULL DEFAULT x''")
+            }
         }
     }
 
