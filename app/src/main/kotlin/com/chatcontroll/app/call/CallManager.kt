@@ -467,7 +467,16 @@ class CallManager @Inject constructor(
         val engine = webRtcEngine
         webRtcEngine = null
         _pendingOfferPayload = null
-        _pendingNewContact = null
+        // Clear _pendingNewContact under signalMutex to stay consistent with
+        // acceptCall() and handleIncomingSignal(). Use tryLock because endCall()
+        // is non-suspending and always runs on Main — if the mutex is held by a
+        // signal handler, the @Volatile write still guarantees visibility.
+        if (signalMutex.tryLock()) {
+            _pendingNewContact = null
+            signalMutex.unlock()
+        } else {
+            _pendingNewContact = null
+        }
         pendingIceCandidates.clear()
         remoteDescriptionSet = false
         _callSessionKeys.values.forEach { keys ->

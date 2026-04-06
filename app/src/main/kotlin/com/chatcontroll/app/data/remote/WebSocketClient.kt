@@ -55,6 +55,7 @@ class WebSocketClient @Inject constructor(
 
     private var client: HttpClient? = null
 
+    @Synchronized
     private fun getOrCreateClient(): HttpClient {
         return client ?: HttpClient(OkHttp) {
             install(WebSockets) {
