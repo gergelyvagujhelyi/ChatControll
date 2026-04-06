@@ -922,21 +922,24 @@ class CallManager @Inject constructor(
         if (encrypted.isEmpty()) return ""
         val sessionKeys = ensureSessionKeys(peerId)
         val callKey = deriveCallKey(sessionKeys.receiveKey, callId)
-        require(encrypted.contains('.')) { "Invalid encrypted payload format" }
-        val parts = encrypted.split('.', limit = 2)
-        val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
-        val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
         try {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
-            val plaintext = cipher.doFinal(ciphertext)
-            val result = String(plaintext, Charsets.UTF_8)
-            plaintext.fill(0)
-            return result
+            require(encrypted.contains('.')) { "Invalid encrypted payload format" }
+            val parts = encrypted.split('.', limit = 2)
+            val nonce = Base64.decode(parts[0], Base64.NO_WRAP)
+            val ciphertext = Base64.decode(parts[1], Base64.NO_WRAP)
+            try {
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(callKey, "AES"), GCMParameterSpec(128, nonce))
+                val plaintext = cipher.doFinal(ciphertext)
+                val result = String(plaintext, Charsets.UTF_8)
+                plaintext.fill(0)
+                return result
+            } finally {
+                nonce.fill(0)
+                ciphertext.fill(0)
+            }
         } finally {
             callKey.fill(0)
-            nonce.fill(0)
-            ciphertext.fill(0)
         }
     }
 
