@@ -847,6 +847,18 @@ class CallManager @Inject constructor(
             pqcEstablished = false,
         )
 
+        // Guard: if endCall() ran while we were suspended (e.g. during
+        // fetchKeyBundle), the call is over and _callSessionKeys was already
+        // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
+        val currentCall = _callState.value
+        if (currentCall == null || currentCall.peerId != peerId ||
+            currentCall.status == CallStatus.ENDED || currentCall.status == CallStatus.FAILED
+        ) {
+            sessionKeys.sendKey.fill(0)
+            sessionKeys.receiveKey.fill(0)
+            throw IllegalStateException("Call ended while deriving session keys for $peerId")
+        }
+
         _callSessionKeys[peerId] = sessionKeys
         logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
         return sessionKeys
