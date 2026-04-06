@@ -107,8 +107,13 @@ def verify_token(
     except InvalidSignature:
         raise ValueError("Invalid Ed25519 signature")
 
-    # --- ML-DSA-65 signature verification (if both sides support it) ---
-    if pqc_sig_b64 and pqc_signing_key_b64:
+    # --- ML-DSA-65 signature verification ---
+    # If the user has a PQC signing key, the ML-DSA signature is REQUIRED.
+    # Allowing it to be omitted would let an attacker who breaks Ed25519
+    # bypass the hybrid auth model entirely.
+    if pqc_signing_key_b64:
+        if not pqc_sig_b64:
+            raise ValueError("ML-DSA-65 signature required")
         pqc_key_bytes = base64.b64decode(pqc_signing_key_b64)
         raw_pk = _extract_mldsa_raw_pk(pqc_key_bytes)
         if raw_pk is None:

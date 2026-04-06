@@ -318,7 +318,14 @@ class MessageRepositoryImpl @Inject constructor(
                 countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                 continue
             }
-            // ML-DSA-65 post-quantum signature verification
+            // ML-DSA-65 post-quantum signature verification.
+            // If the sender has a PQC signing key, the signature is REQUIRED —
+            // omitting it would bypass the hybrid authentication model.
+            if (senderContact.pqcSigningKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}")
+                countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
+                continue
+            }
             if (dto.pqcSignature.isNotEmpty() && senderContact.pqcSigningKey.isNotEmpty()) {
                 val pqcSig = try {
                     Base64.decode(dto.pqcSignature, Base64.NO_WRAP)
@@ -696,7 +703,14 @@ class MessageRepositoryImpl @Inject constructor(
             receivedIds.add(dto.messageId)
             return true
         }
-        // ML-DSA-65 verification for control messages
+        // ML-DSA-65 verification for control messages.
+        // If the sender has a PQC signing key, the signature is REQUIRED.
+        if (pqcSignKey != null && pqcSignKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                "$ctrl ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}")
+            receivedIds.add(dto.messageId)
+            return true
+        }
         if (dto.pqcSignature.isNotEmpty() && pqcSignKey != null && pqcSignKey.isNotEmpty()) {
             val pqcSig = try {
                 Base64.decode(dto.pqcSignature, Base64.NO_WRAP)

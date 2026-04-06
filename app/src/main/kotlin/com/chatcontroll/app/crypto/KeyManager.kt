@@ -269,6 +269,13 @@ class KeyManager @Inject constructor(
             .apply()
     }
 
+    fun stageMlDsaKeys(publicKey: ByteArray, privateKey: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(PENDING_MLDSA_PUBLIC, publicKey.toHex())
+            .putString(PENDING_MLDSA_PRIVATE, privateKey.toHex())
+            .apply()
+    }
+
     /**
      * Promote staged keys to active. Called after server confirms rotation,
      * or on app startup if staged keys exist (server accepted but app crashed
@@ -286,12 +293,20 @@ class KeyManager @Inject constructor(
             .putString(KEY_PUBLIC_IDENTITY, pubId)
             .putString(KEY_PRIVATE_IDENTITY, privId)
 
-        // Promote PQC keys if staged
+        // Promote PQC KEM keys if staged
         val pqcEk = encryptedPrefs.getString(PENDING_PQC_ENCAPSULATION, null)
         val pqcDk = encryptedPrefs.getString(PENDING_PQC_DECAPSULATION, null)
         if (pqcEk != null && pqcDk != null) {
             editor.putString(KEY_PQC_ENCAPSULATION, pqcEk)
             editor.putString(KEY_PQC_DECAPSULATION, pqcDk)
+        }
+
+        // Promote ML-DSA signing keys if staged
+        val mlDsaPub = encryptedPrefs.getString(PENDING_MLDSA_PUBLIC, null)
+        val mlDsaPriv = encryptedPrefs.getString(PENDING_MLDSA_PRIVATE, null)
+        if (mlDsaPub != null && mlDsaPriv != null) {
+            editor.putString(KEY_MLDSA_PUBLIC, mlDsaPub)
+            editor.putString(KEY_MLDSA_PRIVATE, mlDsaPriv)
         }
 
         // Clear staged keys and commit synchronously for crash safety.
@@ -304,6 +319,8 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PRIVATE_IDENTITY)
             .remove(PENDING_PQC_ENCAPSULATION)
             .remove(PENDING_PQC_DECAPSULATION)
+            .remove(PENDING_MLDSA_PUBLIC)
+            .remove(PENDING_MLDSA_PRIVATE)
             .commit()
     }
 
@@ -319,6 +336,8 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PRIVATE_IDENTITY)
             .remove(PENDING_PQC_ENCAPSULATION)
             .remove(PENDING_PQC_DECAPSULATION)
+            .remove(PENDING_MLDSA_PUBLIC)
+            .remove(PENDING_MLDSA_PRIVATE)
             .apply()
     }
 
@@ -352,6 +371,8 @@ class KeyManager @Inject constructor(
         private const val PENDING_PRIVATE_IDENTITY = "pending_priv_id"
         private const val PENDING_PQC_ENCAPSULATION = "pending_pqc_ek"
         private const val PENDING_PQC_DECAPSULATION = "pending_pqc_dk"
+        private const val PENDING_MLDSA_PUBLIC = "pending_mldsa_pub"
+        private const val PENDING_MLDSA_PRIVATE = "pending_mldsa_priv"
     }
 }
 

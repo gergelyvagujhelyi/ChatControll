@@ -293,7 +293,7 @@ class IdentityRepositoryImpl @Inject constructor(
             keyManager.stagePqcKeys(newPqcEk.encapsulationKey, newPqcEk.decapsulationKey)
         }
         if (newMlDsa != null) {
-            keyManager.storeMlDsaKeys(newMlDsa.publicKey, newMlDsa.privateKey)
+            keyManager.stageMlDsaKeys(newMlDsa.publicKey, newMlDsa.privateKey)
         }
         // ML-DSA proof-of-possession: sign the new pqc_signing_key B64 with the new ML-DSA private key
         val pqcProofB64 = if (newMlDsa != null && newMlDsaB64 != null) {

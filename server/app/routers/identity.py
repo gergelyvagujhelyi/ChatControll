@@ -178,8 +178,12 @@ async def rotate_keys(
         logging.getLogger(__name__).warning("Key proof validation error: %s", e)
         raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
 
-    # Verify ML-DSA-65 proof-of-possession for the new PQC signing key
-    if request.pqc_signing_key and request.pqc_key_proof:
+    # Verify ML-DSA-65 proof-of-possession for the new PQC signing key.
+    # If a PQC key is provided, proof is REQUIRED — otherwise an attacker
+    # could inject an arbitrary key without proving possession.
+    if request.pqc_signing_key:
+        if not request.pqc_key_proof:
+            raise HTTPException(status_code=400, detail="pqc_key_proof required when rotating PQC signing key")
         from app.auth import _extract_mldsa_raw_pk, _verify_mldsa_signature
         try:
             pqc_pub_bytes = base64.b64decode(request.pqc_signing_key, validate=True)
