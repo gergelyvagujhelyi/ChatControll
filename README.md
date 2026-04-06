@@ -32,7 +32,7 @@ ChatControll is a 1:1 messaging app designed around three principles:
 - **DI**: Hilt
 - **Local storage**: Room + SQLCipher (AES-256 encrypted database)
 - **Networking**: Ktor Client (mock service layer included)
-- **Push**: Firebase Cloud Messaging (wake-up signal only — no message content in push payloads)
+- **Push**: Firebase Cloud Messaging (wake-up signal with sender ID for notification routing — no message content in push payloads)
 - **Crypto**: Hybrid X25519 + ML-KEM-768 key establishment, AES-256-GCM payloads
 
 ## Build & Run
@@ -104,6 +104,8 @@ app/src/main/kotlin/com/chatcontroll/app/
 │   ├── MockPqcProvider.kt          # Test-only mock (not used in production)
 │   ├── HybridCryptoEngine.kt       # Combines classical + PQC (static sessions)
 │   ├── KeyManager.kt               # Keystore-backed key storage
+│   ├── SessionResetSender.kt       # Sends session_reset / account_deleted control msgs
+│   ├── SignatureUtils.kt           # Shared signature payload construction
 │   └── ratchet/                # Double Ratchet protocol
 │       ├── DoubleRatchet.kt        # Signal-style ratchet implementation
 │       ├── RatchetSessionManager.kt # CryptoEngine backed by ratchet
@@ -126,12 +128,18 @@ app/src/main/kotlin/com/chatcontroll/app/
 ├── ui/
 │   ├── theme/                  # Material 3 theme
 │   ├── components/             # Reusable Compose components
+│   │   ├── CallEventItem.kt       # Inline call history events
+│   │   ├── KeyChangeEventItem.kt  # Key rotation / account deletion events
+│   │   ├── MessageBubble.kt       # Chat message bubble
+│   │   ├── ConversationItem.kt    # Conversation list row
+│   │   ├── EmptyState.kt          # Empty placeholder
+│   │   └── QrCodeImage.kt         # Share code QR rendering
 │   ├── onboarding/             # Guest identity creation flow
 │   ├── conversations/          # Conversation list
-│   ├── chat/                   # Chat thread + composer
+│   ├── chat/                   # Chat thread + composer + PQC indicator
 │   ├── call/                   # Call screen + ViewModel
 │   ├── contacts/               # Add contact via share code
-│   ├── settings/               # Privacy & security settings
+│   ├── settings/               # Privacy, security settings & account deletion
 │   └── navigation/             # Nav graph
 └── worker/                     # WorkManager tasks (sync, retry)
 ```
@@ -152,7 +160,7 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 3. **Python relay server** — Full FastAPI backend in `server/` with SQLite/PostgreSQL support, WebSocket real-time delivery, FCM push forwarding, rate limiting, and comprehensive test suite. `KtorApiService` + `WebSocketClient` connect the Android app to it.
 
-4. **Encrypted voice calls** — WebRTC-based 1:1 voice calls with end-to-end encrypted signaling. Ephemeral HMAC-based TURN credentials (coturn-compatible) are generated per session. Call signals are relayed via WebSocket with FCM push fallback and server-side buffering for offline recipients (v0.3.7).
+4. **Encrypted voice calls** — WebRTC-based 1:1 voice calls with end-to-end encrypted signaling and frame-level media encryption via WebRTC FrameCryptor (AES-GCM + HKDF). Ephemeral HMAC-based TURN credentials (coturn-compatible) are generated per session. Call signals are relayed via WebSocket with FCM push fallback and server-side buffering for offline recipients (v0.3.7). Call events (missed, answered with duration) appear inline in chat history.
 
 5. **Ed25519 authentication** — All API requests are authenticated with Ed25519 signed tokens. Message envelopes are signed by the sender and verified by the recipient.
 
@@ -167,6 +175,16 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 10. **Call signaling reliability (v0.3.7)** — Call signals now fall back to FCM push when the recipient's WebSocket is disconnected. The server buffers undelivered signals (30s TTL) and flushes them when the recipient reconnects. The caller sees "Contact unavailable" after a 35s ringing timeout instead of ringing indefinitely. Hangup/reject UI responds instantly (signal sent fire-and-forget in background).
 
 11. **Call to new contacts (v0.3.8)** — Calls to newly added contacts now work even before any messages have been exchanged. The recipient fetches the caller's key bundle from the server on demand, verifies the call signal signature, and only then persists the contact locally.
+
+12. **Key change events in chat history (v0.3.9)** — Local and remote key rotations are now recorded as in-conversation events. When you rotate your keys, each contact's chat shows "You rotated your keys"; when a peer rotates, their chat shows "Peer rotated their keys". Events are rendered with a distinct key icon and centered layout.
+
+13. **Account deletion flow (v0.3.9)** — Wiping local data now sends an `account_deleted` control message to all contacts and deletes the server-side identity before clearing local storage. Peers see a distinct "Peer deleted their account" event (with error-colored icon) and sending is permanently blocked for that conversation. If the server is unreachable during wipe, a retry/skip dialog lets the user choose to retry or delete locally anyway.
+
+14. **Navigation ghost-click fix (v0.3.9)** — During Compose Navigation exit animations, both the outgoing and incoming composable are in the composition tree. Tapping the same screen position could trigger actions on the outgoing screen (e.g., call button firing when settings button was pressed). Fixed by checking `Lifecycle.State.RESUMED` before processing interactive actions.
+
+15. **Faster navigation transitions (v0.3.9)** — Screen transitions reduced to 150ms slide+fade for snappier navigation feel.
+
+16. **Push notification fix (v0.3.10)** — FCM push payload now includes sender ID for notification routing. Notifications are now shown by `MessageRepositoryImpl` after decryption, displaying the real sender name and decrypted message body instead of generic "New encrypted message" text. Notifications are suppressed when the conversation is already open. On FCM receipt, WebSocket is reconnected to flush buffered call signals.
 
 ## Next Priorities
 

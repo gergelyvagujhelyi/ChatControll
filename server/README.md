@@ -6,7 +6,7 @@ Privacy-first encrypted message relay built with Python and FastAPI.
 
 - Stores public key bundles for contact discovery via share codes
 - Relays encrypted envelopes between clients
-- Sends FCM wake-up signals for offline delivery (messages and call offers)
+- Sends FCM wake-up signals for offline delivery (messages and call offers); payload includes only sender ID for notification routing, never message content
 - Provides WebSocket connections for real-time delivery
 - Buffers undelivered call signals for offline recipients (30s TTL)
 - Deletes envelopes after recipient acknowledgement
@@ -83,7 +83,7 @@ See `.env.example` for all configuration options including `TURN_SECRET`, `METRI
 
 ### Automated Deployment
 
-A cron-based pull deploy script (`deploy.sh`) is included for lightweight servers. It polls for new commits on `develop`, only rebuilds Docker when files in `server/` actually change, and skips otherwise.
+A cron-based pull deploy script (`deploy.sh`) is included for lightweight servers. It polls for new commits on `develop`, only rebuilds Docker when files in `server/` actually change, and skips otherwise. The script operates from the repository root so `git diff -- server/` resolves correctly.
 
 **Setup on the server:**
 
@@ -94,6 +94,18 @@ crontab -e
 ```
 
 Features: file-based locking (no overlapping deploys), Docker layer caching, corrupt/force-pushed commit recovery, and dirty working tree cleanup.
+
+### Manual Deployment
+
+To deploy manually without waiting for the cron cycle:
+
+```bash
+cd /path/to/ChatControll
+git pull origin develop
+docker compose -f server/docker-compose.yml build server
+docker compose -f server/docker-compose.yml up -d --force-recreate server
+docker image prune -f
+```
 
 ## Database
 
