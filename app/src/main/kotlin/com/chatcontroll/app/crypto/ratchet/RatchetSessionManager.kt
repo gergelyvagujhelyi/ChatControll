@@ -97,10 +97,14 @@ class RatchetSessionManager @Inject constructor(
             kemCiphertext = encapsulation.ciphertext
         }
 
+        // Capture PQC status before zeroization — .isNotEmpty() checks .size
+        // which survives .fill(0), but capturing the flag is more robust.
+        val isPqcEstablished = pqcSecret.isNotEmpty()
+
         // Combine classical + PQC secrets via HKDF, then zeroize inputs
-        val ikm = if (pqcSecret.isNotEmpty()) classicalSecret + pqcSecret else classicalSecret
+        val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret
         classicalSecret.fill(0)
-        if (pqcSecret.isNotEmpty()) pqcSecret.fill(0)
+        if (isPqcEstablished) pqcSecret.fill(0)
 
         val sharedSecret = hkdfSha256(
             ikm = ikm,
@@ -143,7 +147,7 @@ class RatchetSessionManager @Inject constructor(
             sendingChainKey = ChainKey(if (isInitiator) chainA else chainB, 0),
             receivingChainKey = ChainKey(if (isInitiator) chainB else chainA, 0),
             pendingKemCiphertext = kemCiphertext,
-            pqcEstablished = pqcSecret.isNotEmpty(),
+            pqcEstablished = isPqcEstablished,
         )
 
         sessionsMutex.withLock {
@@ -155,7 +159,7 @@ class RatchetSessionManager @Inject constructor(
             sendKey = if (isInitiator) chainA else chainB,
             receiveKey = if (isInitiator) chainB else chainA,
             sessionId = sessionId,
-            pqcEstablished = pqcSecret.isNotEmpty(),
+            pqcEstablished = isPqcEstablished,
         )
     }
 

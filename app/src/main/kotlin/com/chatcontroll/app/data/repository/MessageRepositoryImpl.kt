@@ -286,36 +286,34 @@ class MessageRepositoryImpl @Inject constructor(
                 continue
             }
 
-            // Verify sender signature if present
-            if (dto.signature.isNotEmpty()) {
-                if (senderContact == null) {
-                    // Force session establishment to fetch and save the key bundle
-                    tryEstablishSession(dto.senderId, kemCiphertext)
-                    senderContact = contactDao.getByUserId(dto.senderId)
-                }
-                if (senderContact == null) {
-                    // Cannot verify — reject the message
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
-                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
-                    receivedIds.add(dto.messageId)
-                    continue
-                }
-                val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
-                val sig = try {
-                    Base64.decode(dto.signature, Base64.NO_WRAP)
-                } catch (_: Exception) {
-                    receivedIds.add(dto.messageId)
-                    continue
-                }
-                val valid = cryptoEngine.verify(sigPayload, sig, senderContact.publicSigningKey)
-                if (!valid) {
-                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
-                    // Don't ACK immediately — leave in pending queue for retry on
-                    // next sync (key rotation race could cause transient failure).
-                    // ACK after MAX_DECRYPT_RETRIES to prevent queue poisoning.
-                    countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
-                    continue
-                }
+            // Verify sender signature (guaranteed non-empty after the check above)
+            if (senderContact == null) {
+                // Force session establishment to fetch and save the key bundle
+                tryEstablishSession(dto.senderId, kemCiphertext)
+                senderContact = contactDao.getByUserId(dto.senderId)
+            }
+            if (senderContact == null) {
+                // Cannot verify — reject the message
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Cannot verify signature: unknown sender ${dto.messageId}")
+                storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
+                receivedIds.add(dto.messageId)
+                continue
+            }
+            val sigPayload = buildMessageSigPayload(dto.senderId, localUserId, envelope.nonce, envelope.ciphertext)
+            val sig = try {
+                Base64.decode(dto.signature, Base64.NO_WRAP)
+            } catch (_: Exception) {
+                receivedIds.add(dto.messageId)
+                continue
+            }
+            val valid = cryptoEngine.verify(sigPayload, sig, senderContact.publicSigningKey)
+            if (!valid) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
+                // Don't ACK immediately — leave in pending queue for retry on
+                // next sync (key rotation race could cause transient failure).
+                // ACK after MAX_DECRYPT_RETRIES to prevent queue poisoning.
+                countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
+                continue
             }
 
             val peerMutex = peerLocks.computeIfAbsent(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
