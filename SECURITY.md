@@ -118,7 +118,7 @@ The FCM push token is tied to the device's Google account. A sophisticated adver
 - Support alternative push mechanisms (UnifiedPush, WebSocket fallback)
 
 ### Message Authentication (v0.3.0+)
-Messages are signed with Ed25519 before sending. The recipient verifies the signature against the sender's stored public signing key before decryption. Messages from older clients without signatures are still accepted for backward compatibility.
+Messages are signed with Ed25519 before sending. The recipient verifies the signature against the sender's stored public signing key before decryption. Since v0.3.10, unsigned messages are unconditionally rejected — the legacy backward-compatibility exemption for contacts with `signatureRequired=false` has been removed to prevent impersonation via unsigned message injection.
 
 ### Call Signal Authentication (v0.3.1+)
 Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519. The recipient verifies the signature against the sender's public signing key before processing. This prevents call signal injection by a compromised relay server. Since v0.3.8, if the sender is not yet a local contact (e.g. newly added contact with no prior messages), the key bundle is fetched from the server and the contact is persisted only after signature verification succeeds.
@@ -150,6 +150,17 @@ Call signaling has been progressively hardened:
 ### Rate Limiter Hardening (server v0.3.4)
 - **Disconnect bypass fix**: Per-user WebSocket signal rate limit state is no longer cleared on disconnect. Previously, a malicious user could reset their quota by reconnecting. Stale entries are pruned periodically (idle > 5 min) instead.
 - **Pruning performance**: Rate limit pruning in both WebSocket and REST call signaling routers now uses a high-water mark (2000 entries) with time-gated scans (once per 60s) to avoid O(N) dictionary iteration under the global lock on every request.
+
+### Security Hardening (v0.3.10 / server v0.3.5)
+- **Key material zeroization**: Private signing keys, PQC decapsulation keys, classical/PQC shared secrets, HKDF inputs, and chain material are zeroized after use to limit lifetime in memory.
+- **Ratchet state rollback**: Encrypt/decrypt snapshot persisted state before mutation; rollback uses the snapshot instead of re-reading from disk (which could itself fail).
+- **Ratchet header validation**: `messageNumber` and `previousChainLength` from untrusted input are validated as non-negative before use.
+- **PQC downgrade on failure**: If KEM ciphertext is present but session re-establishment fails, the message is rejected rather than silently falling back to classical-only keys.
+- **Server TOCTOU fix**: Message queue depth check uses `FOR UPDATE` row lock on the recipient's Identity to prevent concurrent requests bypassing `MAX_PENDING_MESSAGES_PER_USER`.
+- **Share code collision on rotation**: Key rotation now catches `IntegrityError` on commit, matching bootstrap's collision protection.
+- **Nginx security headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, and Referrer-Policy added.
+- **Rate limiter multi-worker compensation**: Per-worker IP rate limit is divided by `UVICORN_WORKERS` count.
+- **WebSocket DB session scoping**: DB session is explicitly closed after auth to avoid pool exhaustion on long-lived connections.
 
 ### Certificate Pinning
 Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry.
@@ -189,6 +200,11 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] Account deletion protocol — contacts notified, server identity deleted, send permanently blocked
 - [x] Key change audit trail — rotation and deletion events visible in chat history
 - [x] Call frame encryption — AES-GCM via WebRTC FrameCryptor, HKDF-derived keys
+- [x] Key material zeroization — signing keys, shared secrets, chain material wiped after use
+- [x] Mandatory message signatures — unsigned messages rejected unconditionally
+- [x] Nginx security headers — HSTS, CSP, X-Frame-Options, nosniff, Referrer-Policy
+- [x] Server TOCTOU protection — row-level locking on message queue depth check
+- [x] Ratchet header validation — bounds checking on untrusted messageNumber/previousChainLength
 - [ ] Push proxy to break FCM linkability
 - [x] Key rotation protocol — `rotateIdentityKeys()` with crash-safe staged promotion
 - [ ] Automated key rotation schedule + old-key grace period

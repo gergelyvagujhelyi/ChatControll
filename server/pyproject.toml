@@ -1,6 +1,6 @@
 [project]
 name = "chatcontroll-server"
-version = "0.3.4"
+version = "0.3.5"
 description = "ChatControll relay server — routes encrypted envelopes, never sees plaintext."
 requires-python = ">=3.11"
 dependencies = [

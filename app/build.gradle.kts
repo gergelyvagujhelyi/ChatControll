@@ -36,8 +36,8 @@ android {
         applicationId = "com.vagujhelyigergely.chatcontroll"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.3.9"
+        versionCode = 16
+        versionName = "0.3.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
