@@ -86,13 +86,15 @@ object DatabaseModule {
     /** v5→v6: add unique index on conversations.contactId to prevent duplicate rows per contact. */
     private val MIGRATION_5_6 = object : Migration(5, 6) {
         override fun migrate(db: SupportSQLiteDatabase) {
-            // Remove any duplicate contactId rows, keeping the one with the latest message
+            // Remove any duplicate contactId rows, keeping the one with the latest message.
+            // SQLite guarantees non-aggregated columns come from the MAX() row.
             db.execSQL("""
                 DELETE FROM conversations WHERE id NOT IN (
                     SELECT id FROM (
-                        SELECT id, ROW_NUMBER() OVER (PARTITION BY contactId ORDER BY lastMessageTimestamp DESC) AS rn
+                        SELECT id, MAX(COALESCE(lastMessageTimestamp, 0))
                         FROM conversations
-                    ) WHERE rn = 1
+                        GROUP BY contactId
+                    )
                 )
             """.trimIndent())
             db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_conversations_contactId ON conversations (contactId)")
