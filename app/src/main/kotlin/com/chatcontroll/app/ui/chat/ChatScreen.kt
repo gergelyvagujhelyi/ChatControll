@@ -43,6 +43,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -73,6 +75,7 @@ fun ChatScreen(
     val needsSessionReset = conversation?.needsSessionReset == true
 
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
 
@@ -105,7 +108,10 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (lifecycleOwner.lifecycle.currentState != Lifecycle.State.RESUMED) return@IconButton
+                        onBack()
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -137,6 +143,9 @@ fun ChatScreen(
                 },
                 actions = {
                     IconButton(onClick = {
+                        // Ignore taps during exit animation to prevent ghost-clicks
+                        // when the outgoing screen overlaps the incoming one.
+                        if (lifecycleOwner.lifecycle.currentState != Lifecycle.State.RESUMED) return@IconButton
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                             == PackageManager.PERMISSION_GRANTED
                         ) {
