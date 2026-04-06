@@ -15,4 +15,5 @@ interface IdentityRepository {
     suspend fun rotateIdentityKeys()
     suspend fun fetchKeyBundle(userId: String): Contact?
     fun isPqcSession(peerId: String): Boolean
+    fun observePqcSession(peerId: String): Flow<Boolean>
 }

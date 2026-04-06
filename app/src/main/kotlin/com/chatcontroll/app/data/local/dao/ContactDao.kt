@@ -16,6 +16,9 @@ interface ContactDao {
     @Query("SELECT * FROM contacts WHERE userId = :userId")
     suspend fun getByUserId(userId: String): ContactEntity?
 
+    @Query("SELECT * FROM contacts WHERE userId = :userId")
+    fun observeByUserId(userId: String): Flow<ContactEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(contact: ContactEntity)
 

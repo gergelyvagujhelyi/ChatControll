@@ -68,7 +68,7 @@ fun ChatScreen(
     val composerText by viewModel.composerText.collectAsState()
     val sendError by viewModel.sendError.collectAsState()
     val isReEstablishing by viewModel.isReEstablishing.collectAsState()
-    val encryptionInfo = viewModel.encryptionInfo
+    val encryptionInfo by viewModel.encryptionInfo.collectAsState()
     val needsSessionReset = conversation?.needsSessionReset == true
 
     val context = LocalContext.current

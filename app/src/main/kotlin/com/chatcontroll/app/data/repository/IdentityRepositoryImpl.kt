@@ -305,4 +305,8 @@ class IdentityRepositoryImpl @Inject constructor(
     }
 
     override fun isPqcSession(peerId: String): Boolean = keyManager.isPeerPqcEstablished(peerId)
+
+    override fun observePqcSession(peerId: String): Flow<Boolean> {
+        return contactDao.observeByUserId(peerId).map { it?.pqcEstablished == true }
+    }
 }
