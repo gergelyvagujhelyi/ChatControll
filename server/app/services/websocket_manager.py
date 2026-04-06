@@ -149,6 +149,7 @@ class WebSocketManager:
         call_id: str,
         encrypted_payload: str,
         signature: str = "",
+        kem_ciphertext: str = "",
     ) -> bool:
         """Relay an opaque encrypted call signal to the recipient.
 
@@ -157,13 +158,16 @@ class WebSocketManager:
         async with self._lock:
             sockets = list(self._connections.get(recipient_id, {}))
 
-        payload = json.dumps({
+        msg: dict[str, str] = {
             "type": signal_type,
             "sender_id": sender_id,
             "call_id": call_id,
             "encrypted_payload": encrypted_payload,
             "signature": signature,
-        })
+        }
+        if kem_ciphertext:
+            msg["kem_ciphertext"] = kem_ciphertext
+        payload = json.dumps(msg)
 
         if not sockets:
             # Recipient offline — buffer the signal for delivery when they connect

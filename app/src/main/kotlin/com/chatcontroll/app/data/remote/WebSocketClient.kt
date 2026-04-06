@@ -191,6 +191,7 @@ class WebSocketClient @Inject constructor(
                         callId = msg["call_id"]?.jsonPrimitive?.content ?: "",
                         encryptedPayload = msg["encrypted_payload"]?.jsonPrimitive?.content ?: "",
                         signature = msg["signature"]?.jsonPrimitive?.content ?: "",
+                        kemCiphertext = msg["kem_ciphertext"]?.jsonPrimitive?.content ?: "",
                     )
                     _incomingCallSignals.tryEmit(signal)
                 }

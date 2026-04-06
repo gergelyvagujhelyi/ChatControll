@@ -77,6 +77,7 @@ async def relay_signal(
         call_id=request.call_id,
         encrypted_payload=request.encrypted_payload,
         signature=request.signature,
+        kem_ciphertext=request.kem_ciphertext,
     )
 
     # FCM push fallback for call_offer — wake the recipient's app so it

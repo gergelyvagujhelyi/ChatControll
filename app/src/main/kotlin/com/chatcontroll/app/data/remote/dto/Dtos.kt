@@ -82,6 +82,7 @@ data class CallSignalRequest(
     val callId: String,
     val encryptedPayload: String,
     val signature: String = "",
+    val kemCiphertext: String = "",
 )
 
 @Serializable
@@ -96,6 +97,7 @@ data class CallSignalDto(
     val callId: String,
     val encryptedPayload: String,
     val signature: String = "",
+    val kemCiphertext: String = "",
 )
 
 @Serializable

@@ -31,4 +31,6 @@ data class CallState(
     val relayUnavailable: Boolean = false,
     /** True when the caller is not a known contact (fetched on demand). */
     val isNewContact: Boolean = false,
+    /** True when the call uses hybrid PQC (ML-KEM-768 + X25519). */
+    val pqcEstablished: Boolean = false,
 )

@@ -86,6 +86,7 @@ class CallSignalRequest(BaseModel):
     call_id: str = Field(..., max_length=128)
     encrypted_payload: str = Field(..., max_length=65536)
     signature: str = Field("", max_length=512)
+    kem_ciphertext: str = Field("", max_length=2048)  # ML-KEM-768 ciphertext (~1452 B base64); only on call_offer
 
 
 class CallSignalResponse(BaseModel):
