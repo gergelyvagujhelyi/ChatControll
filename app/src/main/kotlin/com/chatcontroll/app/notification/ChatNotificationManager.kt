@@ -47,6 +47,14 @@ class ChatNotificationManager @Inject constructor(
             // is not capped by the channel.
         }
 
+        val missedCallChannel = NotificationChannel(
+            CHANNEL_MISSED_CALLS,
+            "Missed Calls",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Missed call notifications"
+        }
+
         val serviceChannel = NotificationChannel(
             CHANNEL_SERVICE,
             "Background Service",
@@ -56,6 +64,7 @@ class ChatNotificationManager @Inject constructor(
         }
 
         manager.createNotificationChannel(messageChannel)
+        manager.createNotificationChannel(missedCallChannel)
         manager.createNotificationChannel(serviceChannel)
     }
 
@@ -115,8 +124,67 @@ class ChatNotificationManager @Inject constructor(
             .notify(notificationId, notification)
     }
 
-    fun cancelNotification(conversationId: String) {
-        NotificationManagerCompat.from(context).cancel(conversationId.hashCode() and Int.MAX_VALUE)
+    suspend fun showMissedCallNotification(
+        callerId: String,
+        callerName: String,
+        conversationId: String? = null,
+    ) {
+        if (!hasNotificationPermission()) return
+
+        val settings = settingsRepository.getPrivacySettings().firstOrNull() ?: PrivacySettings()
+
+        val (title, body) = when (settings.lockScreenPreview) {
+            LockScreenPreviewMode.SHOW_ALL -> callerName to "Missed call"
+            LockScreenPreviewMode.SENDER_ONLY -> callerName to "Missed call"
+            LockScreenPreviewMode.HIDE_BODY -> callerName to "Missed call"
+            LockScreenPreviewMode.HIDE_ALL -> "ChatControll" to "Missed call"
+        }
+
+        val visibility = when (settings.lockScreenPreview) {
+            LockScreenPreviewMode.SHOW_ALL -> NotificationCompat.VISIBILITY_PUBLIC
+            LockScreenPreviewMode.SENDER_ONLY -> NotificationCompat.VISIBILITY_PUBLIC
+            LockScreenPreviewMode.HIDE_BODY -> NotificationCompat.VISIBILITY_PRIVATE
+            LockScreenPreviewMode.HIDE_ALL -> NotificationCompat.VISIBILITY_SECRET
+        }
+
+        val deepLinkIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (conversationId != null) {
+                putExtra(EXTRA_CONVERSATION_ID, conversationId)
+                putExtra(EXTRA_CONTACT_ID, callerId)
+            }
+        }
+
+        val notificationId = ("missed-call-$callerId").hashCode() and Int.MAX_VALUE
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notificationId,
+            deepLinkIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_MISSED_CALLS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(visibility)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .build()
+
+        NotificationManagerCompat.from(context)
+            .notify(notificationId, notification)
+    }
+
+    fun cancelNotification(conversationId: String, contactId: String? = null) {
+        val compat = NotificationManagerCompat.from(context)
+        compat.cancel(conversationId.hashCode() and Int.MAX_VALUE)
+        if (contactId != null) {
+            compat.cancel(("missed-call-$contactId").hashCode() and Int.MAX_VALUE)
+        }
     }
 
     private fun hasNotificationPermission(): Boolean {
@@ -134,6 +202,7 @@ class ChatNotificationManager @Inject constructor(
         /** Legacy channel ID — had VISIBILITY_SECRET that capped per-notification visibility. */
         private const val CHANNEL_MESSAGES_LEGACY = "messages"
         const val CHANNEL_MESSAGES = "messages_v2"
+        const val CHANNEL_MISSED_CALLS = "missed_calls"
         const val CHANNEL_SERVICE = "background_service"
         const val EXTRA_CONVERSATION_ID = "conversation_id"
         const val EXTRA_CONTACT_ID = "contact_id"
