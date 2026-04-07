@@ -24,6 +24,7 @@ import com.chatcontroll.app.domain.model.CallStatus
 import com.chatcontroll.app.domain.model.MessageState
 import com.chatcontroll.app.domain.repository.CryptoEngine
 import com.chatcontroll.app.domain.repository.SessionKeys
+import com.chatcontroll.app.notification.ChatNotificationManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
@@ -63,6 +64,7 @@ class CallManager @Inject constructor(
     private val contactDao: com.chatcontroll.app.data.local.dao.ContactDao,
     private val messageDao: MessageDao,
     private val conversationDao: ConversationDao,
+    private val notificationManager: ChatNotificationManager,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -666,6 +668,15 @@ class CallManager @Inject constructor(
                 else -> "Call"
             }
             updateConversationPreview(conversationId, peerId, preview, now)
+
+            // Show missed call notification for incoming calls the user didn't answer or reject
+            if (messageState == MessageState.CALL_MISSED && endStatus != CallStatus.REJECTED) {
+                notificationManager.showMissedCallNotification(
+                    callerId = peerId,
+                    callerName = callState.peerDisplayName,
+                    conversationId = conversationId,
+                )
+            }
 
             logDebug("Recorded call event: $messageState, duration=${durationSeconds}s")
         } catch (e: Exception) {
