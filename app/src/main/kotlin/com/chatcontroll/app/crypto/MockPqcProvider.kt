@@ -64,7 +64,7 @@ class MockPqcProvider @Inject constructor() : PqcProvider {
 
     override fun verify(data: ByteArray, signature: ByteArray, publicKey: ByteArray): Boolean {
         val expected = sign(data, publicKey)
-        return signature.contentEquals(expected)
+        return java.security.MessageDigest.isEqual(signature, expected)
     }
 
     companion object {

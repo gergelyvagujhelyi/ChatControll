@@ -36,7 +36,6 @@ object DatabaseModule {
         dbKey.fill(0)
 
         val factory = SupportOpenHelperFactory(passphrase)
-        passphrase.fill(0)
 
         return try {
             buildDatabase(context, factory).also {
@@ -48,6 +47,11 @@ object DatabaseModule {
             context.deleteDatabase(DB_NAME)
             databaseWasReset = true
             buildDatabase(context, factory)
+        } finally {
+            // Zeroize AFTER SQLCipher has opened and read the passphrase.
+            // SupportOpenHelperFactory stores a reference without copying,
+            // so filling before open defeats encryption entirely.
+            passphrase.fill(0)
         }
     }
 

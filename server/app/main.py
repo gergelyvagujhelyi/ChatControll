@@ -188,26 +188,32 @@ class BodySizeLimitMiddleware:
 
         # Wrap receive to track cumulative body size for chunked requests
         total_bytes = 0
-        rejected = False
+        response_started = False
+
+        class _BodyTooLarge(Exception):
+            pass
 
         async def counting_receive():
-            nonlocal total_bytes, rejected
+            nonlocal total_bytes
             msg = await receive()
             if msg["type"] == "http.request":
                 total_bytes += len(msg.get("body", b""))
                 if total_bytes > MAX_REQUEST_BODY_BYTES:
-                    rejected = True
-                    raise ValueError("Request body too large")
+                    raise _BodyTooLarge()
             return msg
 
+        async def tracking_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
         try:
-            await self.app(scope, counting_receive, send)
-        except ValueError:
-            if rejected:
+            await self.app(scope, counting_receive, tracking_send)
+        except _BodyTooLarge:
+            if not response_started:
                 response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
                 await response(scope, receive, send)
-            else:
-                raise
 
 
 app.add_middleware(BodySizeLimitMiddleware)

@@ -105,6 +105,7 @@ class HybridCryptoEngine @Inject constructor(
         // Deterministic key assignment so both sides agree
         val keyA = combinedSecret.copyOfRange(0, 32)
         val keyB = combinedSecret.copyOfRange(32, 64)
+        combinedSecret.fill(0)
 
         return SessionKeys(
             sendKey = if (isInitiator) keyA else keyB,
@@ -180,10 +181,16 @@ internal fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length
         mac.update(t)
         mac.update(info)
         mac.update(i.toByte())
+        val prev = t
         t = mac.doFinal()
+        if (prev.isNotEmpty()) prev.fill(0)
         System.arraycopy(t, 0, output, (i - 1) * hashLen, hashLen)
     }
-    return output.copyOfRange(0, length)
+    t.fill(0)
+    prk.fill(0)
+    val result = output.copyOfRange(0, length)
+    output.fill(0)
+    return result
 }
 
 private fun sha256Hex(data: ByteArray): String {

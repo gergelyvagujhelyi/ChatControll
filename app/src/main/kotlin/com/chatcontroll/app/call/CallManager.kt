@@ -47,6 +47,7 @@ import kotlinx.serialization.json.Json
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -93,6 +94,8 @@ class CallManager @Inject constructor(
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
      *  Insertion order (accessOrder=false) so time-based eviction is correct. */
     private val seenSignalSignatures = LinkedHashMap<String, Long>(64, 0.75f, false)
+    /** Guards [endCall] against concurrent invocation — only the first caller proceeds. */
+    private val endCallGuard = AtomicBoolean(false)
     private val _callError = MutableStateFlow<String?>(null)
     val callError: StateFlow<String?> = _callError.asStateFlow()
 
@@ -177,14 +180,22 @@ class CallManager @Inject constructor(
                     lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
                     lengthPrefixed(signal.signalType.toByteArray(Charsets.UTF_8)) +
                     lengthPrefixed(signal.callId.toByteArray(Charsets.UTF_8)) +
-                    signal.encryptedPayload.toByteArray(Charsets.UTF_8)
+                    lengthPrefixed(signal.encryptedPayload.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(signal.kemCiphertext.toByteArray(Charsets.UTF_8))
                 val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
                     logWarn("Call signal signature verification failed for ${signal.senderId.take(8)}")
                     return@launch
                 }
-                // ML-DSA-65 post-quantum signature verification
+                // ML-DSA-65 post-quantum signature verification.
+                // If the contact has a PQC signing key, the signature is REQUIRED —
+                // allowing it to be omitted would let an attacker who breaks Ed25519
+                // bypass the hybrid auth model (same enforcement as MessageRepositoryImpl).
+                if (contact.pqcSigningKey.isNotEmpty() && signal.pqcSignature.isEmpty()) {
+                    logWarn("ML-DSA signature missing from PQC-capable sender ${signal.senderId.take(8)}")
+                    return@launch
+                }
                 if (signal.pqcSignature.isNotEmpty() && contact.pqcSigningKey.isNotEmpty()) {
                     try {
                         val pqcSig = Base64.decode(signal.pqcSignature, Base64.NO_WRAP)
@@ -464,9 +475,14 @@ class CallManager @Inject constructor(
 
     /** Process answer payload — called outside signalMutex after validation. */
     private suspend fun processAnswerPayload(signal: CallSignalDto) {
+        // Guard against call ending between mutex release and here — without this
+        // check, requestAudioFocus() could leave AudioManager in MODE_IN_COMMUNICATION
+        // after endCall() has already called abandonAudioFocus().
+        if (webRtcEngine == null || _callState.value?.status in TERMINAL_STATUSES) return
+
         val sdpJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
-        webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
+        webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp) ?: return
 
         remoteDescriptionSet = true
         drainPendingIceCandidates()
@@ -502,6 +518,9 @@ class CallManager @Inject constructor(
     }
 
     private fun endCall(status: CallStatus) {
+        // Only the first concurrent invocation proceeds — prevents double-dispose
+        // of native WebRTC resources and double-zeroization of session keys.
+        if (!endCallGuard.compareAndSet(false, true)) return
         val endingState = _callState.value
         _callState.value = endingState?.copy(status = status)
         ringingTimeoutJob?.cancel()
@@ -557,6 +576,8 @@ class CallManager @Inject constructor(
             if (_callState.value?.callId == endedCallId) {
                 _callState.value = null
             }
+            // Reset guard so the next call can use endCall()
+            endCallGuard.set(false)
         }
     }
 
@@ -774,11 +795,16 @@ class CallManager @Inject constructor(
     private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String): Boolean? {
         val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, callId, payload) else ""
         val senderId = keyManager.getUserId() ?: return null
+        // Attach KEM ciphertext to the call_offer (initiator → responder)
+        val kemCt = if (signalType == "call_offer") {
+            _pendingOutboundKemCiphertext.also { _pendingOutboundKemCiphertext = null } ?: ""
+        } else ""
         val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(peerId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(signalType.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(callId.toByteArray(Charsets.UTF_8)) +
-            encrypted.toByteArray(Charsets.UTF_8)
+            lengthPrefixed(encrypted.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(kemCt.toByteArray(Charsets.UTF_8))
         val signature = Base64.encodeToString(keyManager.sign(sigPayload), Base64.NO_WRAP)
         // ML-DSA-65 post-quantum signature (if local keys are available)
         val pqcSig = try {
@@ -794,10 +820,6 @@ class CallManager @Inject constructor(
             logWarn("ML-DSA signing failed, sending without PQC signature: ${e.message}")
             ""
         }
-        // Attach KEM ciphertext to the call_offer (initiator → responder)
-        val kemCt = if (signalType == "call_offer") {
-            _pendingOutboundKemCiphertext.also { _pendingOutboundKemCiphertext = null } ?: ""
-        } else ""
         val request = CallSignalRequest(
             recipientId = peerId,
             signalType = signalType,
@@ -1109,13 +1131,21 @@ class CallManager @Inject constructor(
  *
  * Uses the Keccak sponge construction (SHA-3 family) instead of HMAC-SHA-256
  * so the entire post-quantum call path avoids SHA-2 dependencies.
- * Input: SHAKE-256(salt || ikm || info) truncated to [length] bytes.
+ * Each input is length-prefixed (4-byte big-endian length) to prevent
+ * concatenation collisions between different (salt, ikm, info) tuples.
  */
 private fun shake256Kdf(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
     val digest = org.bouncycastle.crypto.digests.SHAKEDigest(256)
-    digest.update(salt, 0, salt.size)
-    digest.update(ikm, 0, ikm.size)
-    digest.update(info, 0, info.size)
+    for (part in arrayOf(salt, ikm, info)) {
+        val lenBytes = byteArrayOf(
+            (part.size shr 24).toByte(),
+            (part.size shr 16).toByte(),
+            (part.size shr 8).toByte(),
+            part.size.toByte(),
+        )
+        digest.update(lenBytes, 0, 4)
+        digest.update(part, 0, part.size)
+    }
     val output = ByteArray(length)
     digest.doFinal(output, 0, length)
     return output

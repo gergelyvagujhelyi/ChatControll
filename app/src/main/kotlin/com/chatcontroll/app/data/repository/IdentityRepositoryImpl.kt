@@ -307,6 +307,10 @@ class IdentityRepositoryImpl @Inject constructor(
             } catch (_: Exception) { "" }
         } else ""
 
+        // Zeroize PQC private keys now that staging and proof signing are done
+        newPqcEk?.decapsulationKey?.fill(0)
+        newMlDsa?.privateKey?.fill(0)
+
         // Call server (authenticated with the CURRENT signing key via authToken)
         val response = try {
             apiService.rotateKeys(

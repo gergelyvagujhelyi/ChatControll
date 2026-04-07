@@ -46,11 +46,14 @@ def _verify_mldsa_signature(
     raw_pk: bytes, message: bytes, signature: bytes,
 ) -> bool:
     """Verify an ML-DSA-65 signature using pqcrypto."""
+    from pqcrypto.sign.ml_dsa_65 import verify
     try:
-        from pqcrypto.sign.ml_dsa_65 import verify
         verify(raw_pk, message, signature)
         return True
+    except ValueError:
+        return False
     except Exception:
+        logger.exception("Unexpected error during ML-DSA-65 verification")
         return False
 
 

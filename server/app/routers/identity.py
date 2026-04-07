@@ -203,11 +203,18 @@ async def rotate_keys(
     if identity is None:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Prevent clearing an existing PQC signing key without a valid new one.
+    # An attacker who compromises Ed25519 could otherwise downgrade the user
+    # from hybrid PQC+Ed25519 auth back to Ed25519-only by sending an empty
+    # pqc_signing_key — exactly the scenario hybrid PQC auth is designed to prevent.
+    if identity.pqc_signing_key and not request.pqc_signing_key:
+        raise HTTPException(status_code=400, detail="Cannot clear PQC signing key once set")
+
     identity.public_signing_key = request.public_signing_key
     identity.public_identity_key = request.public_identity_key
     if request.pqc_encapsulation_key is not None:
         identity.pqc_encapsulation_key = request.pqc_encapsulation_key
-    if request.pqc_signing_key is not None:
+    if request.pqc_signing_key:
         identity.pqc_signing_key = request.pqc_signing_key
 
     # Recompute share code from new identity key.
