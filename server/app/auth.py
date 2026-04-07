@@ -30,21 +30,26 @@ logger = logging.getLogger(__name__)
 # Tokens older than 5 minutes are rejected.
 TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 
-# ML-DSA-65 SPKI header is 22 bytes; raw public key is 1952 bytes.
-_MLDSA65_SPKI_HEADER_LEN = 22
+# ML-DSA-65 raw public key is 1952 bytes.
 _MLDSA65_RAW_PK_LEN = 1952
-# DER-encoded OID for ML-DSA-65: 2.16.840.1.101.3.4.3.18
-_MLDSA65_OID = bytes.fromhex("0609608648016503040312")
+# Expected SPKI/DER header for ML-DSA-65 (22 bytes):
+#   SEQUENCE { SEQUENCE { OID 2.16.840.1.101.3.4.3.18 } BIT STRING ... }
+_MLDSA65_SPKI_HEADER = bytes.fromhex(
+    "308207b2"          # SEQUENCE (outer)
+    "300b"              # SEQUENCE (algorithm identifier)
+    "0609608648016503040312"  # OID 2.16.840.1.101.3.4.3.18 (ML-DSA-65)
+    "038207a100"        # BIT STRING header + unused-bits byte
+)
 
 
 def _extract_mldsa_raw_pk(key_bytes: bytes) -> Optional[bytes]:
     """Extract raw ML-DSA-65 public key from X509/SPKI DER or raw encoding."""
     if len(key_bytes) == _MLDSA65_RAW_PK_LEN:
         return key_bytes  # Already raw (e.g. from pqcrypto library)
-    if len(key_bytes) == _MLDSA65_SPKI_HEADER_LEN + _MLDSA65_RAW_PK_LEN:
-        if _MLDSA65_OID not in key_bytes[:_MLDSA65_SPKI_HEADER_LEN]:
-            return None  # SPKI header does not contain ML-DSA-65 OID
-        return key_bytes[_MLDSA65_SPKI_HEADER_LEN:]  # SPKI/DER (e.g. Bouncy Castle)
+    if len(key_bytes) == len(_MLDSA65_SPKI_HEADER) + _MLDSA65_RAW_PK_LEN:
+        if not key_bytes.startswith(_MLDSA65_SPKI_HEADER):
+            return None  # Not a valid ML-DSA-65 SPKI encoding
+        return key_bytes[len(_MLDSA65_SPKI_HEADER):]  # Strip DER header
     return None
 
 
