@@ -62,7 +62,7 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
                 sharedSecret = secretKey.encoded,
             )
         } finally {
-            secretKey.destroy()
+            tryDestroy(secretKey)
         }
     }
 
@@ -77,7 +77,7 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
         try {
             return secretKey.encoded
         } finally {
-            secretKey.destroy()
+            tryDestroy(secretKey)
         }
     }
 
@@ -107,6 +107,16 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
         sig.initVerify(pubKey)
         sig.update(data)
         return sig.verify(signature)
+    }
+
+    /** Best-effort key zeroization — Android's default Destroyable.destroy() throws. */
+    private fun tryDestroy(key: javax.security.auth.Destroyable) {
+        try {
+            key.destroy()
+        } catch (_: javax.security.auth.DestroyFailedException) {
+            // Android's default implementation doesn't support destroy;
+            // the shared secret was already copied out by the caller.
+        }
     }
 
     companion object {

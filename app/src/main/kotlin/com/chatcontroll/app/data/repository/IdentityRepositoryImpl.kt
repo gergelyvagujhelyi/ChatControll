@@ -168,18 +168,9 @@ class IdentityRepositoryImpl @Inject constructor(
             pqcSigningKey = pqcSignKey,
         )
 
-        // Store contact locally
-        contactDao.upsert(
-            ContactEntity(
-                userId = contact.userId,
-                displayName = contact.displayName,
-                publicIdentityKey = contact.publicIdentityKey,
-                publicSigningKey = contact.publicSigningKey,
-                pqcSigningKey = contact.pqcSigningKey,
-            )
-        )
-
-        // Establish crypto session
+        // Establish crypto session BEFORE persisting the contact — if session
+        // establishment fails, we don't leave an orphaned contact in the DB
+        // that shows up in the contacts list without a working session.
         val localKeyPair = keyManager.loadIdentityKeyPair()
             ?: throw IllegalStateException("No local identity")
 
@@ -203,19 +194,17 @@ class IdentityRepositoryImpl @Inject constructor(
         )
         keyManager.cacheSessionKeys(contact.userId, sessionKeys)
 
-        // Sync the contact's PQC flag now that the session is established
-        if (sessionKeys.pqcEstablished) {
-            contactDao.upsert(
-                ContactEntity(
-                    userId = contact.userId,
-                    displayName = contact.displayName,
-                    publicIdentityKey = contact.publicIdentityKey,
-                    publicSigningKey = contact.publicSigningKey,
-                    pqcSigningKey = contact.pqcSigningKey,
-                    pqcEstablished = true,
-                )
+        // Persist contact only after session is successfully established
+        contactDao.upsert(
+            ContactEntity(
+                userId = contact.userId,
+                displayName = contact.displayName,
+                publicIdentityKey = contact.publicIdentityKey,
+                publicSigningKey = contact.publicSigningKey,
+                pqcSigningKey = contact.pqcSigningKey,
+                pqcEstablished = sessionKeys.pqcEstablished,
             )
-        }
+        )
 
         return contact
     }
