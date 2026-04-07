@@ -52,6 +52,9 @@ class MessageRepositoryImpl @Inject constructor(
     /** Track consecutive decrypt failures per message to avoid infinite retry. */
     private val decryptFailCounts = ConcurrentHashMap<String, Int>()
 
+    /** Track skipped syncs for messages missing a PQC signature (may be transient). */
+    private val pqcSigMissCounts = ConcurrentHashMap<String, Int>()
+
     /** Track peers already notified with session_reset to avoid duplicate signals. */
     private val sessionResetSentTo: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -82,6 +85,14 @@ class MessageRepositoryImpl @Inject constructor(
                 .take(evictCount)
                 .map { it.key }
             keysToEvict.forEach { decryptFailCounts.remove(it) }
+        }
+        if (pqcSigMissCounts.size > PRUNE_THRESHOLD) {
+            val evictCount = pqcSigMissCounts.size - PRUNE_THRESHOLD
+            val keysToEvict = pqcSigMissCounts.entries.toList()
+                .sortedBy { it.value }
+                .take(evictCount)
+                .map { it.key }
+            keysToEvict.forEach { pqcSigMissCounts.remove(it) }
         }
         if (sessionResetSentTo.size > PRUNE_THRESHOLD) {
             sessionResetSentTo.clear()
@@ -322,8 +333,24 @@ class MessageRepositoryImpl @Inject constructor(
             // If the sender has a PQC signing key, the signature is REQUIRED —
             // omitting it would bypass the hybrid authentication model.
             if (senderContact.pqcSigningKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
-                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}")
-                countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
+                // Missing ML-DSA signature from a PQC-capable sender.  This may
+                // be a timing issue (message sent before the sender's PQC upgrade
+                // completed) rather than an attack.  Skip without ACKing so the
+                // message is retried on next sync — same approach as control
+                // messages (see handleControlMessage).  After MAX_PQC_SIG_MISS_RETRIES
+                // sync cycles, permanently reject so the message doesn't retry forever.
+                val misses = (pqcSigMissCounts[dto.messageId] ?: 0) + 1
+                pqcSigMissCounts[dto.messageId] = misses
+                if (misses >= MAX_PQC_SIG_MISS_RETRIES) {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}, rejecting after $misses attempts")
+                    pqcSigMissCounts.remove(dto.messageId)
+                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
+                    receivedIds.add(dto.messageId)
+                } else {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}, skipping for retry ($misses/$MAX_PQC_SIG_MISS_RETRIES)")
+                }
                 continue
             }
             if (dto.pqcSignature.isNotEmpty() && senderContact.pqcSigningKey.isNotEmpty()) {
@@ -337,8 +364,12 @@ class MessageRepositoryImpl @Inject constructor(
                     pqcProvider.verify(sigPayload, pqcSig, senderContact.pqcSigningKey)
                 } catch (_: Exception) { false }
                 if (!pqcValid) {
+                    // Invalid ML-DSA signature is an authentication failure,
+                    // not a decryption failure.  Reject without counting toward
+                    // session reset.
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "ML-DSA signature verification failed for ${dto.messageId}")
-                    countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
+                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
+                    receivedIds.add(dto.messageId)
                     continue
                 }
             }
@@ -349,6 +380,7 @@ class MessageRepositoryImpl @Inject constructor(
                     cryptoEngine.decrypt(sessionKeys, envelope)
                 }
                 decryptFailCounts.remove(dto.messageId)
+                pqcSigMissCounts.remove(dto.messageId)
                 result
             } catch (e: Exception) {
                 // If both sides encapsulated independently (different PQC secrets),
@@ -361,6 +393,7 @@ class MessageRepositoryImpl @Inject constructor(
                                 cryptoEngine.decrypt(reEstablished, envelope)
                             }
                             decryptFailCounts.remove(dto.messageId)
+                            pqcSigMissCounts.remove(dto.messageId)
                             result
                         } catch (retryEx: Exception) {
                             if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo",
@@ -817,6 +850,9 @@ class MessageRepositoryImpl @Inject constructor(
         /** After this many failed decrypt attempts, acknowledge the message to
          *  prevent it from poisoning the pending queue forever. */
         private const val MAX_DECRYPT_RETRIES = 3
+        /** Sync cycles to skip a message with a missing PQC signature before
+         *  permanently rejecting it (gives time for key bundle propagation). */
+        private const val MAX_PQC_SIG_MISS_RETRIES = 3
 
         /** Evict stale entries from in-memory maps when they exceed this size. */
         private const val PRUNE_THRESHOLD = 200
