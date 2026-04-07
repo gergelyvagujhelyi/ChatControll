@@ -37,6 +37,11 @@ object DatabaseModule {
 
         val factory = SupportOpenHelperFactory(passphrase)
 
+        // NOTE: do NOT zeroize `passphrase` — SupportOpenHelperFactory stores a
+        // reference (not a copy) and reuses it every time Room opens a new
+        // SQLite connection (e.g. for concurrent queries on different threads).
+        // Zeroizing it causes "file is not a database" crashes on later queries.
+        // The raw key material (`dbKey`) is already zeroized above.
         return try {
             buildDatabase(context, factory).also {
                 // Force open to detect SQLCipher errors early
@@ -47,11 +52,6 @@ object DatabaseModule {
             context.deleteDatabase(DB_NAME)
             databaseWasReset = true
             buildDatabase(context, factory)
-        } finally {
-            // Zeroize AFTER SQLCipher has opened and read the passphrase.
-            // SupportOpenHelperFactory stores a reference without copying,
-            // so filling before open defeats encryption entirely.
-            passphrase.fill(0)
         }
     }
 
