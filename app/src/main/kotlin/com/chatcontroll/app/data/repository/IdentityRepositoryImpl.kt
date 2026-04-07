@@ -260,7 +260,7 @@ class IdentityRepositoryImpl @Inject constructor(
         val newPqcB64 = newPqcEk?.let {
             Base64.encodeToString(it.encapsulationKey, Base64.NO_WRAP)
         }
-        val newMlDsaB64 = newMlDsa?.let {
+        var newMlDsaB64 = newMlDsa?.let {
             Base64.encodeToString(it.publicKey, Base64.NO_WRAP)
         }
 
@@ -286,15 +286,22 @@ class IdentityRepositoryImpl @Inject constructor(
         if (newMlDsa != null) {
             keyManager.stageMlDsaKeys(newMlDsa.publicKey, newMlDsa.privateKey)
         }
-        // ML-DSA proof-of-possession: sign the new pqc_signing_key B64 with the new ML-DSA private key
-        val pqcProofB64 = if (newMlDsa != null && newMlDsaB64 != null) {
+        // ML-DSA proof-of-possession: sign the new pqc_signing_key B64 with the new ML-DSA private key.
+        // If proof generation fails, clear the new key so neither is sent — sending a key
+        // without proof would be rejected by the server, and sending an empty proof
+        // could silently register an unverified key.
+        var pqcProofB64 = ""
+        if (newMlDsa != null && newMlDsaB64 != null) {
             try {
-                Base64.encodeToString(
+                pqcProofB64 = Base64.encodeToString(
                     pqcProvider.sign(newMlDsaB64.toByteArray(Charsets.UTF_8), newMlDsa.privateKey),
                     Base64.NO_WRAP,
                 )
-            } catch (_: Exception) { "" }
-        } else ""
+            } catch (e: Exception) {
+                android.util.Log.e("IdentityRepo", "ML-DSA proof-of-possession failed, omitting PQC key", e)
+                newMlDsaB64 = null
+            }
+        }
 
         // Zeroize PQC private keys now that staging and proof signing are done
         newPqcEk?.decapsulationKey?.fill(0)

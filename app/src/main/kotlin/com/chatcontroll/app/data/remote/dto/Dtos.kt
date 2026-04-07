@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 data class BootstrapRequest(
     val publicSigningKey: String,
     val publicIdentityKey: String,
-    val pqcEncapsulationKey: String,
+    val pqcEncapsulationKey: String = "",
     val pqcSigningKey: String = "",
     val fcmToken: String? = null,
 )

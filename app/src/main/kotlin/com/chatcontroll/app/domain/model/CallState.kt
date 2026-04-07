@@ -3,7 +3,6 @@ package com.chatcontroll.app.domain.model
 enum class CallDirection { OUTGOING, INCOMING }
 
 enum class CallStatus {
-    IDLE,
     RINGING,
     CONNECTING,
     CONNECTED,

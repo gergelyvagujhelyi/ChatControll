@@ -146,7 +146,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ChatControll Relay",
     description="Privacy-first encrypted message relay server.",
-    version="0.3.5",
+    version="0.4.0",
     lifespan=lifespan,
     # Disable docs in production
     docs_url="/docs" if DEBUG else None,

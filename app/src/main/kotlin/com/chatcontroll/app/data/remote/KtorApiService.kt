@@ -91,30 +91,7 @@ class KtorApiService @Inject constructor(
     private fun userId(): String =
         keyManager.getUserId() ?: throw IllegalStateException("No identity — bootstrap first")
 
-    /**
-     * Generate a dual-signed auth token:
-     * ``<user_id>.<timestamp_ms>.<ed25519_sig>[.<mldsa_sig>]``
-     */
-    private fun authToken(): String {
-        val uid = userId()
-        val ts = System.currentTimeMillis().toString()
-        val payload = "$uid.$ts"
-        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
-        val signature = keyManager.sign(payloadBytes)
-        val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
-        // Append ML-DSA-65 signature if PQC keys are available
-        val pqcSig = try {
-            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
-            if (mlDsaPrivKey != null) {
-                try {
-                    "." + Base64.encodeToString(pqcProvider.sign(payloadBytes, mlDsaPrivKey), Base64.NO_WRAP)
-                } finally {
-                    mlDsaPrivKey.fill(0)
-                }
-            } else ""
-        } catch (_: Exception) { "" }
-        return "$payload.$sigB64$pqcSig"
-    }
+    private fun authToken(): String = keyManager.generateAuthToken(pqcProvider)
 
     override suspend fun bootstrapIdentity(request: BootstrapRequest): BootstrapResponse {
         val response: HttpResponse = client.post("/v1/identity/bootstrap") {
@@ -212,6 +189,9 @@ class KtorApiService @Inject constructor(
         val response: HttpResponse = client.delete("/v1/identity/me") {
             header("Authorization", "Bearer ${authToken()}")
         }
+        // 404 means the identity was already deleted (previous call succeeded
+        // but local wipe failed) — treat as success so retryServerDeletion works.
+        if (response.status.value == 404) return
         check(response.status.isSuccess()) { "Identity deletion failed: ${response.status}" }
     }
 }

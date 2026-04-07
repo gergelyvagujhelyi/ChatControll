@@ -111,23 +111,8 @@ class WebSocketClient @Inject constructor(
     }
 
     private fun generateAuthToken(): String? {
-        val uid = keyManager.getUserId() ?: return null
-        val ts = System.currentTimeMillis().toString()
-        val payload = "$uid.$ts"
-        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
-        val signature = keyManager.sign(payloadBytes)
-        val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
-        val pqcSig = try {
-            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
-            if (mlDsaPrivKey != null) {
-                try {
-                    "." + Base64.encodeToString(pqcProvider.sign(payloadBytes, mlDsaPrivKey), Base64.NO_WRAP)
-                } finally {
-                    mlDsaPrivKey.fill(0)
-                }
-            } else ""
-        } catch (_: Exception) { "" }
-        return "$payload.$sigB64$pqcSig"
+        if (keyManager.getUserId() == null) return null
+        return keyManager.generateAuthToken(pqcProvider)
     }
 
     private suspend fun connectWebSocket() {

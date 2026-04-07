@@ -158,7 +158,8 @@ fun CallScreen(
             // Call duration
             if (callState?.status == CallStatus.CONNECTED) {
                 Spacer(modifier = Modifier.height(8.dp))
-                CallDurationTimer(connectedAt = callState?.connectedAt ?: System.currentTimeMillis())
+                val fallback = remember { System.currentTimeMillis() }
+                CallDurationTimer(connectedAt = callState?.connectedAt ?: fallback)
             }
 
             // Relay unavailable warning
@@ -279,9 +280,9 @@ fun CallScreen(
                 }
             }
             else -> {
-                // Non-active state: hangup (no-op if terminal) + dismiss
+                // Non-active state: hangup (no-op if terminal), LaunchedEffect handles dismiss
                 FilledIconButton(
-                    onClick = { viewModel.hangup(); onCallEnded() },
+                    onClick = { viewModel.hangup() },
                     modifier = Modifier.size(72.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(

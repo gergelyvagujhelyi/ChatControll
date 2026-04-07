@@ -511,7 +511,10 @@ class MessageRepositoryImpl @Inject constructor(
                         "contact was hybrid PQ, refusing classical-only session")
                     return null
                 } else if (sessionKeys.pqcEstablished && !existingContact.pqcEstablished) {
-                    contactDao.upsert(existingContact.copy(pqcEstablished = true))
+                    contactDao.upsert(existingContact.copy(
+                        pqcEstablished = true,
+                        pqcSigningKey = pqcSignKey,
+                    ))
                 }
             }
 
@@ -705,10 +708,12 @@ class MessageRepositoryImpl @Inject constructor(
         }
         // ML-DSA-65 verification for control messages.
         // If the sender has a PQC signing key, the signature is REQUIRED.
+        // Skip without ACKing (don't add to receivedIds) so the message is retried
+        // on next sync — the sender may have just upgraded to PQC and our local
+        // contact DB hasn't received their signing key yet.
         if (pqcSignKey != null && pqcSignKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
             if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
                 "$ctrl ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}")
-            receivedIds.add(dto.messageId)
             return true
         }
         if (dto.pqcSignature.isNotEmpty() && pqcSignKey != null && pqcSignKey.isNotEmpty()) {
@@ -803,6 +808,7 @@ class MessageRepositoryImpl @Inject constructor(
                 mlDsaPrivKey.fill(0)
             }
         } catch (e: Exception) {
+            android.util.Log.w("MessageRepo", "ML-DSA signing failed: ${e.message}")
             ""
         }
     }

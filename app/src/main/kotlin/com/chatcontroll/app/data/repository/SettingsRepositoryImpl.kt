@@ -90,13 +90,7 @@ class SettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun retryServerDeletion() {
-        // The server may have already deleted the identity (previous call
-        // succeeded but local wipe failed). Treat 404 as success.
-        try {
-            apiService.deleteIdentity()
-        } catch (e: IllegalStateException) {
-            if ("404" !in e.message.orEmpty()) throw e
-        }
+        apiService.deleteIdentity()
         wipeLocal()
     }
 
@@ -117,6 +111,11 @@ class SettingsRepositoryImpl @Inject constructor(
         keyManager.wipeAll()
         context.deleteDatabase("chatcontroll.db")
         context.settingsDataStore.edit { it.clear() }
+        // Kill the process so the Hilt singleton graph (including the now-closed
+        // AppDatabase) is fully recreated on next launch. Without this, any
+        // component accessing a DAO after wipe crashes with IllegalStateException
+        // because the @Singleton AppDatabase reference is dead.
+        kotlin.system.exitProcess(0)
     }
 
     companion object {

@@ -73,6 +73,11 @@ class HybridCryptoEngine @Inject constructor(
                 dk.fill(0)
             }
         } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
+            // WARNING: The KEM ciphertext (encapsulation.ciphertext) is discarded here.
+            // The remote peer needs it to decapsulate, so PQC session establishment
+            // will fail. This engine is a non-production fallback — use
+            // RatchetSessionManager for production, which correctly attaches the
+            // ciphertext to the first outbound message header.
             val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
             pqSecret = encapsulation.sharedSecret
         }
@@ -83,7 +88,7 @@ class HybridCryptoEngine @Inject constructor(
         val isPqcEstablished = pqSecret.isNotEmpty()
         val ikm = if (isPqcEstablished) classicalSecret + pqSecret else classicalSecret.copyOf()
         classicalSecret.fill(0)
-        if (isPqcEstablished) pqSecret.fill(0)
+        pqSecret.fill(0)
         val combinedSecret = hkdfSha256(
             ikm = ikm,
             salt = "ChatControll-v1-session".toByteArray(),

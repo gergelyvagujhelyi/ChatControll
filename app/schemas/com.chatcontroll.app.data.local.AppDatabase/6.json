@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 6,
-    "identityHash": "c2a8fb13d38731b7966b46ebd9c867f7",
+    "identityHash": "3541873a322f14b9d8d53c919bef335a",
     "entities": [
       {
         "tableName": "messages",
@@ -190,7 +190,7 @@
       },
       {
         "tableName": "contacts",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`userId` TEXT NOT NULL, `displayName` TEXT NOT NULL, `publicIdentityKey` BLOB NOT NULL, `publicSigningKey` BLOB NOT NULL, `pqcSigningKey` BLOB NOT NULL, `verified` INTEGER NOT NULL, `pqcEstablished` INTEGER NOT NULL, `signatureRequired` INTEGER NOT NULL, PRIMARY KEY(`userId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`userId` TEXT NOT NULL, `displayName` TEXT NOT NULL, `publicIdentityKey` BLOB NOT NULL, `publicSigningKey` BLOB NOT NULL, `verified` INTEGER NOT NULL, `pqcEstablished` INTEGER NOT NULL, `signatureRequired` INTEGER NOT NULL, PRIMARY KEY(`userId`))",
         "fields": [
           {
             "fieldPath": "userId",
@@ -213,12 +213,6 @@
           {
             "fieldPath": "publicSigningKey",
             "columnName": "publicSigningKey",
-            "affinity": "BLOB",
-            "notNull": true
-          },
-          {
-            "fieldPath": "pqcSigningKey",
-            "columnName": "pqcSigningKey",
             "affinity": "BLOB",
             "notNull": true
           },
@@ -254,7 +248,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c2a8fb13d38731b7966b46ebd9c867f7')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3541873a322f14b9d8d53c919bef335a')"
     ]
   }
 }

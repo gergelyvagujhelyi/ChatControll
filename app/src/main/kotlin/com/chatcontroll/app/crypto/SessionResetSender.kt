@@ -47,6 +47,7 @@ class SessionResetSender @Inject constructor(
                 }
             } else ""
         } catch (e: Exception) {
+            android.util.Log.w("SessionResetSender", "ML-DSA signing failed for $ctrl: ${e.message}")
             ""
         }
 

@@ -107,6 +107,10 @@ class CallManager @Inject constructor(
             return
         }
 
+        // Reset the guard so endCall() works for this new call. A previous
+        // call's delayed cleanup coroutine may not have reset it yet.
+        endCallGuard.set(false)
+
         val callId = UUID.randomUUID().toString()
         _callState.value = CallState(
             callId = callId,
@@ -247,6 +251,8 @@ class CallManager @Inject constructor(
                         if (_callState.value != null) {
                             // Already in a call — flag for busy signal outside mutex
                         } else {
+                            // Reset the guard for this new inbound call
+                            endCallGuard.set(false)
                             val displayName = verifiedContact.displayName
                             val isNew = _pendingNewContact != null
                             _callState.value = CallState(
@@ -268,6 +274,10 @@ class CallManager @Inject constructor(
                         val state = _callState.value
                         if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
                             logWarn("Ignoring answer: no matching active call")
+                            return@launch
+                        }
+                        if (state.status in TERMINAL_STATUSES) {
+                            logDebug("Ignoring call_answer: call already ended")
                             return@launch
                         }
                         _callState.value = state.copy(status = CallStatus.CONNECTING)
@@ -941,7 +951,7 @@ class CallManager @Inject constructor(
             // Combine classical + PQC secrets via SHAKE-256 KDF, then zeroize inputs
             val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
             classicalSecret.fill(0)
-            if (isPqcEstablished) pqcSecret.fill(0)
+            pqcSecret.fill(0)
 
             val sharedSecret = shake256Kdf(
                 ikm = ikm,

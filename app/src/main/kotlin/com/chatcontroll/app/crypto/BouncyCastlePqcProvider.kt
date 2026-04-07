@@ -94,10 +94,14 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
     override fun sign(data: ByteArray, privateKey: ByteArray): ByteArray {
         val kf = KeyFactory.getInstance(DSA_ALGORITHM, PROVIDER)
         val privKey = kf.generatePrivate(PKCS8EncodedKeySpec(privateKey))
-        val sig = Signature.getInstance(DSA_ALGORITHM, PROVIDER)
-        sig.initSign(privKey)
-        sig.update(data)
-        return sig.sign()
+        try {
+            val sig = Signature.getInstance(DSA_ALGORITHM, PROVIDER)
+            sig.initSign(privKey)
+            sig.update(data)
+            return sig.sign()
+        } finally {
+            tryDestroy(privKey)
+        }
     }
 
     override fun verify(data: ByteArray, signature: ByteArray, publicKey: ByteArray): Boolean {

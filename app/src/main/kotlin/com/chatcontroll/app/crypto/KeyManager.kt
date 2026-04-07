@@ -76,6 +76,10 @@ class KeyManager @Inject constructor(
         return encryptedPrefs.getString(KEY_MLDSA_PUBLIC, null)?.hexToBytes()
     }
 
+    /**
+     * Returns the ML-DSA-65 private signing key. Caller MUST zeroize the returned
+     * array after use via `fill(0)` to limit key material lifetime in memory.
+     */
     fun getMlDsaPrivateKey(): ByteArray? {
         return encryptedPrefs.getString(KEY_MLDSA_PRIVATE, null)?.hexToBytes()
     }
@@ -209,6 +213,34 @@ class KeyManager @Inject constructor(
         val key = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
         encryptedPrefs.edit().putString(KEY_DB_PASSPHRASE, key.toHex()).apply()
         return key
+    }
+
+    /**
+     * Generate a dual-signed auth token:
+     * ``<user_id>.<timestamp_ms>.<ed25519_sig>[.<mldsa_sig>]``
+     *
+     * Centralised here so KtorApiService and WebSocketClient stay in sync.
+     */
+    fun generateAuthToken(pqcProvider: PqcProvider): String {
+        val uid = getUserId() ?: throw IllegalStateException("No identity — bootstrap first")
+        val ts = System.currentTimeMillis().toString()
+        val payload = "$uid.$ts"
+        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+        val signature = sign(payloadBytes)
+        val sigB64 = android.util.Base64.encodeToString(signature, android.util.Base64.NO_WRAP)
+        // Append ML-DSA-65 signature if PQC keys are available
+        val pqcSig = try {
+            val mlDsaPrivKey = getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    "." + android.util.Base64.encodeToString(
+                        pqcProvider.sign(payloadBytes, mlDsaPrivKey), android.util.Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (_: Exception) { "" }
+        return "$payload.$sigB64$pqcSig"
     }
 
     fun sign(data: ByteArray): ByteArray {
