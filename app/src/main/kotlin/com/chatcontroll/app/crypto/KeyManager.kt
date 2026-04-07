@@ -329,6 +329,10 @@ class KeyManager @Inject constructor(
     }
 
     fun clearStagedKeys() {
+        // Use commit() (synchronous) instead of apply() to ensure staged keys
+        // are removed before returning. With apply(), a crash before the async
+        // disk write completes would leave staged keys on disk, causing
+        // recoverFromInterruptedKeyRotation() to promote rejected keys.
         encryptedPrefs.edit()
             .remove(PENDING_PUBLIC_SIGNING)
             .remove(PENDING_PRIVATE_SIGNING)
@@ -338,7 +342,7 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PQC_DECAPSULATION)
             .remove(PENDING_MLDSA_PUBLIC)
             .remove(PENDING_MLDSA_PRIVATE)
-            .apply()
+            .commit()
     }
 
     fun wipeAll() {

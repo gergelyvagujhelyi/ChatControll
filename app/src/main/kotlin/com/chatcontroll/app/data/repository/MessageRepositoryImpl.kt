@@ -736,6 +736,7 @@ class MessageRepositoryImpl @Inject constructor(
             contactDao.upsert(existingContact.copy(
                 publicSigningKey = pubSignKey,
                 publicIdentityKey = pubIdKey,
+                pqcSigningKey = pqcSignKey ?: ByteArray(0),
                 pqcEstablished = false,
             ))
         }

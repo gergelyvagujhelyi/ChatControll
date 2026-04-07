@@ -56,10 +56,14 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
         keyGen.init(KEMGenerateSpec(publicKey, "AES"), SecureRandom())
 
         val secretKey = keyGen.generateKey() as SecretKeyWithEncapsulation
-        return KemEncapsulation(
-            ciphertext = secretKey.encapsulation,
-            sharedSecret = secretKey.encoded,
-        )
+        try {
+            return KemEncapsulation(
+                ciphertext = secretKey.encapsulation,
+                sharedSecret = secretKey.encoded,
+            )
+        } finally {
+            secretKey.destroy()
+        }
     }
 
     override fun decapsulate(ciphertext: ByteArray, decapsulationKey: ByteArray): ByteArray {
@@ -69,8 +73,12 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
         val keyGen = KeyGenerator.getInstance(ALGORITHM, PROVIDER)
         keyGen.init(KEMExtractSpec(privateKey, ciphertext, "AES"))
 
-        val secretKey = keyGen.generateKey()
-        return secretKey.encoded
+        val secretKey = keyGen.generateKey() as SecretKeyWithEncapsulation
+        try {
+            return secretKey.encoded
+        } finally {
+            secretKey.destroy()
+        }
     }
 
     override fun generateSigningKeyPair(): DsaKeyPair {

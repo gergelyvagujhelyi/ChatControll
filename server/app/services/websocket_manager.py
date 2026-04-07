@@ -121,7 +121,8 @@ class WebSocketManager:
     async def flush_pending_signals(self, user_id: str, websocket: WebSocket) -> None:
         """Deliver pending call signals to a newly connected user."""
         now = time.monotonic()
-        signals = self._pending_call_signals.pop(user_id, [])
+        async with self._lock:
+            signals = self._pending_call_signals.pop(user_id, [])
         for ts, payload in signals:
             if now - ts > _PENDING_SIGNAL_TTL:
                 continue  # expired
@@ -131,15 +132,16 @@ class WebSocketManager:
             except Exception:
                 pass
 
-    def _store_pending_signal(self, recipient_id: str, payload: str) -> None:
+    async def _store_pending_signal(self, recipient_id: str, payload: str) -> None:
         """Buffer a call signal for a user who is currently offline."""
         now = time.monotonic()
-        pending = self._pending_call_signals.setdefault(recipient_id, [])
-        # Evict expired entries
-        pending[:] = [(ts, p) for ts, p in pending if now - ts <= _PENDING_SIGNAL_TTL]
-        # Cap at a reasonable number to prevent abuse
-        if len(pending) < 20:
-            pending.append((now, payload))
+        async with self._lock:
+            pending = self._pending_call_signals.setdefault(recipient_id, [])
+            # Evict expired entries
+            pending[:] = [(ts, p) for ts, p in pending if now - ts <= _PENDING_SIGNAL_TTL]
+            # Cap at a reasonable number to prevent abuse
+            if len(pending) < 20:
+                pending.append((now, payload))
 
     async def relay_call_signal(
         self,
@@ -174,7 +176,7 @@ class WebSocketManager:
 
         if not sockets:
             # Recipient offline — buffer the signal for delivery when they connect
-            self._store_pending_signal(recipient_id, payload)
+            await self._store_pending_signal(recipient_id, payload)
             return False
 
         delivered = False

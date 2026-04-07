@@ -33,8 +33,10 @@ object DatabaseModule {
     ): AppDatabase {
         val dbKey = keyManager.getDatabaseKey()
         val passphrase = dbKey.joinToString("") { "%02x".format(it) }.toByteArray()
+        dbKey.fill(0)
 
         val factory = SupportOpenHelperFactory(passphrase)
+        passphrase.fill(0)
 
         return try {
             buildDatabase(context, factory).also {

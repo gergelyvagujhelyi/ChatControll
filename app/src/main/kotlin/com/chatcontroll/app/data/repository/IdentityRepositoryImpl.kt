@@ -105,10 +105,12 @@ class IdentityRepositoryImpl @Inject constructor(
             val kemKeyPair = pqcProvider.generateKemKeyPair()
             keyManager.storePqcKeys(kemKeyPair.encapsulationKey, kemKeyPair.decapsulationKey)
             pqcEk = kemKeyPair.encapsulationKey
+            kemKeyPair.decapsulationKey.fill(0)
 
             val dsaKeyPair = pqcProvider.generateSigningKeyPair()
             keyManager.storeMlDsaKeys(dsaKeyPair.publicKey, dsaKeyPair.privateKey)
             pqcSigningKey = dsaKeyPair.publicKey
+            dsaKeyPair.privateKey.fill(0)
         }
 
         // Register with relay server

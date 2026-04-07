@@ -67,20 +67,30 @@ class HybridCryptoEngine @Inject constructor(
         if (inboundKemCiphertext != null) {
             val dk = keyManager.getPqcDecapsulationKey()
                 ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
-            pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
+            try {
+                pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
+            } finally {
+                dk.fill(0)
+            }
         } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
             val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
             pqSecret = encapsulation.sharedSecret
         }
 
-        // Combine via HKDF
-        val ikm = if (pqSecret.isNotEmpty()) classicalSecret + pqSecret else classicalSecret
+        // Combine via HKDF, then zeroize inputs.
+        // In the PQC path, `+` creates a new array so classicalSecret can be
+        // zeroized independently. In classical-only, copyOf() avoids aliasing.
+        val isPqcEstablished = pqSecret.isNotEmpty()
+        val ikm = if (isPqcEstablished) classicalSecret + pqSecret else classicalSecret.copyOf()
+        classicalSecret.fill(0)
+        if (isPqcEstablished) pqSecret.fill(0)
         val combinedSecret = hkdfSha256(
             ikm = ikm,
             salt = "ChatControll-v1-session".toByteArray(),
             info = "hybrid-key-establishment".toByteArray(),
             length = 64,
         )
+        ikm.fill(0)
 
         // Sort keys so both peers compute the same sessionId regardless of role
         val localHex = localIdentity.publicIdentityKey.joinToString("") { "%02x".format(it) }
@@ -100,7 +110,7 @@ class HybridCryptoEngine @Inject constructor(
             sendKey = if (isInitiator) keyA else keyB,
             receiveKey = if (isInitiator) keyB else keyA,
             sessionId = sessionId,
-            pqcEstablished = pqSecret.isNotEmpty(),
+            pqcEstablished = isPqcEstablished,
         )
     }
 

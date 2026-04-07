@@ -88,7 +88,13 @@ class SettingsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun retryServerDeletion() {
-        apiService.deleteIdentity()
+        // The server may have already deleted the identity (previous call
+        // succeeded but local wipe failed). Treat 404 as success.
+        try {
+            apiService.deleteIdentity()
+        } catch (e: IllegalStateException) {
+            if ("404" !in e.message.orEmpty()) throw e
+        }
         wipeLocal()
     }
 
@@ -98,9 +104,9 @@ class SettingsRepositoryImpl @Inject constructor(
 
     private suspend fun wipeLocal() {
         webSocketClient.disconnect()
-        messageDao.deleteAll()
-        conversationDao.deleteAll()
-        contactDao.deleteAll()
+        // Wipe crypto keys first (makes DB inaccessible), then delete the
+        // DB file. Do NOT use DAOs after wipeAll() — the Room singleton's
+        // SQLCipher connection is invalidated when the file is removed.
         keyManager.wipeAll()
         context.deleteDatabase("chatcontroll.db")
         context.settingsDataStore.edit { it.clear() }

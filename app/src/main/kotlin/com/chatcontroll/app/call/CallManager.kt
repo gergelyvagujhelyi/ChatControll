@@ -746,7 +746,7 @@ class CallManager @Inject constructor(
                     _callState.update { state ->
                         state?.copy(
                             status = CallStatus.CONNECTED,
-                            connectedAt = System.currentTimeMillis(),
+                            connectedAt = state.connectedAt ?: System.currentTimeMillis(),
                         )
                     }
                 }
