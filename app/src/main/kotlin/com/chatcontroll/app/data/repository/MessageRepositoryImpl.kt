@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.repository
 
 import android.util.Base64
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.crypto.SessionResetSender
 import com.chatcontroll.app.crypto.buildMessageSigPayload
 import com.chatcontroll.app.data.local.dao.ContactDao
@@ -39,6 +40,7 @@ class MessageRepositoryImpl @Inject constructor(
     private val apiService: ApiService,
     private val cryptoEngine: CryptoEngine,
     private val keyManager: KeyManager,
+    private val pqcProvider: PqcProvider,
     private val sessionResetSender: SessionResetSender,
     private val notificationManager: ChatNotificationManager,
 ) : MessageRepository {
@@ -49,6 +51,9 @@ class MessageRepositoryImpl @Inject constructor(
 
     /** Track consecutive decrypt failures per message to avoid infinite retry. */
     private val decryptFailCounts = ConcurrentHashMap<String, Int>()
+
+    /** Track skipped syncs for messages missing a PQC signature (may be transient). */
+    private val pqcSigMissCounts = ConcurrentHashMap<String, Int>()
 
     /** Track peers already notified with session_reset to avoid duplicate signals. */
     private val sessionResetSentTo: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -80,6 +85,14 @@ class MessageRepositoryImpl @Inject constructor(
                 .take(evictCount)
                 .map { it.key }
             keysToEvict.forEach { decryptFailCounts.remove(it) }
+        }
+        if (pqcSigMissCounts.size > PRUNE_THRESHOLD) {
+            val evictCount = pqcSigMissCounts.size - PRUNE_THRESHOLD
+            val keysToEvict = pqcSigMissCounts.entries.toList()
+                .sortedBy { it.value }
+                .take(evictCount)
+                .map { it.key }
+            keysToEvict.forEach { pqcSigMissCounts.remove(it) }
         }
         if (sessionResetSentTo.size > PRUNE_THRESHOLD) {
             sessionResetSentTo.clear()
@@ -141,6 +154,7 @@ class MessageRepositoryImpl @Inject constructor(
         val sigPayload = buildMessageSigPayload(senderId, recipientId, envelope.nonce, envelope.ciphertext)
         val signature = keyManager.sign(sigPayload)
         val signatureB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
+        val pqcSignatureB64 = signWithMlDsa(sigPayload)
 
         // Send to server
         try {
@@ -150,6 +164,7 @@ class MessageRepositoryImpl @Inject constructor(
                     encryptedBody = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP),
                     nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
                     signature = signatureB64,
+                    pqcSignature = pqcSignatureB64,
                 )
             )
             messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
@@ -194,6 +209,7 @@ class MessageRepositoryImpl @Inject constructor(
             val retrySenderId = keyManager.getUserId() ?: throw IllegalStateException("No identity")
             val retrySigPayload = buildMessageSigPayload(retrySenderId, entity.recipientId, envelope.nonce, envelope.ciphertext)
             val retrySignature = keyManager.sign(retrySigPayload)
+            val retryPqcSig = signWithMlDsa(retrySigPayload)
 
             val response = apiService.sendMessage(
                 SendMessageRequest(
@@ -201,6 +217,7 @@ class MessageRepositoryImpl @Inject constructor(
                     encryptedBody = Base64.encodeToString(envelope.ciphertext, Base64.NO_WRAP),
                     nonce = Base64.encodeToString(envelope.nonce, Base64.NO_WRAP),
                     signature = Base64.encodeToString(retrySignature, Base64.NO_WRAP),
+                    pqcSignature = retryPqcSig,
                 )
             )
             messageDao.updateStateAndTimestamp(messageId, MessageState.SENT.name, response.timestamp)
@@ -309,11 +326,52 @@ class MessageRepositoryImpl @Inject constructor(
             val valid = cryptoEngine.verify(sigPayload, sig, senderContact.publicSigningKey)
             if (!valid) {
                 if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "Signature verification failed for ${dto.messageId}")
-                // Don't ACK immediately — leave in pending queue for retry on
-                // next sync (key rotation race could cause transient failure).
-                // ACK after MAX_DECRYPT_RETRIES to prevent queue poisoning.
                 countDecryptFailure(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp, receivedIds)
                 continue
+            }
+            // ML-DSA-65 post-quantum signature verification.
+            // If the sender has a PQC signing key, the signature is REQUIRED —
+            // omitting it would bypass the hybrid authentication model.
+            if (senderContact.pqcSigningKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
+                // Missing ML-DSA signature from a PQC-capable sender.  This may
+                // be a timing issue (message sent before the sender's PQC upgrade
+                // completed) rather than an attack.  Skip without ACKing so the
+                // message is retried on next sync — same approach as control
+                // messages (see handleControlMessage).  After MAX_PQC_SIG_MISS_RETRIES
+                // sync cycles, permanently reject so the message doesn't retry forever.
+                val misses = (pqcSigMissCounts[dto.messageId] ?: 0) + 1
+                pqcSigMissCounts[dto.messageId] = misses
+                if (misses >= MAX_PQC_SIG_MISS_RETRIES) {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}, rejecting after $misses attempts")
+                    pqcSigMissCounts.remove(dto.messageId)
+                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
+                    receivedIds.add(dto.messageId)
+                } else {
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                        "ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}, skipping for retry ($misses/$MAX_PQC_SIG_MISS_RETRIES)")
+                }
+                continue
+            }
+            if (dto.pqcSignature.isNotEmpty() && senderContact.pqcSigningKey.isNotEmpty()) {
+                val pqcSig = try {
+                    Base64.decode(dto.pqcSignature, Base64.NO_WRAP)
+                } catch (_: Exception) {
+                    receivedIds.add(dto.messageId)
+                    continue
+                }
+                val pqcValid = try {
+                    pqcProvider.verify(sigPayload, pqcSig, senderContact.pqcSigningKey)
+                } catch (_: Exception) { false }
+                if (!pqcValid) {
+                    // Invalid ML-DSA signature is an authentication failure,
+                    // not a decryption failure.  Reject without counting toward
+                    // session reset.
+                    if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "ML-DSA signature verification failed for ${dto.messageId}")
+                    storeRejected(dto.messageId, dto.senderId, localUserId, envelope, dto.timestamp)
+                    receivedIds.add(dto.messageId)
+                    continue
+                }
             }
 
             val peerMutex = peerLocks.computeIfAbsent(dto.senderId) { kotlinx.coroutines.sync.Mutex() }
@@ -322,6 +380,7 @@ class MessageRepositoryImpl @Inject constructor(
                     cryptoEngine.decrypt(sessionKeys, envelope)
                 }
                 decryptFailCounts.remove(dto.messageId)
+                pqcSigMissCounts.remove(dto.messageId)
                 result
             } catch (e: Exception) {
                 // If both sides encapsulated independently (different PQC secrets),
@@ -334,6 +393,7 @@ class MessageRepositoryImpl @Inject constructor(
                                 cryptoEngine.decrypt(reEstablished, envelope)
                             }
                             decryptFailCounts.remove(dto.messageId)
+                            pqcSigMissCounts.remove(dto.messageId)
                             result
                         } catch (retryEx: Exception) {
                             if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.e("MessageRepo",
@@ -433,6 +493,13 @@ class MessageRepositoryImpl @Inject constructor(
                     return null
                 }
             } else ByteArray(0)
+            val pqcSignKey = if (bundle.pqcSigningKey.isNotEmpty()) {
+                try {
+                    Base64.decode(bundle.pqcSigningKey, Base64.NO_WRAP)
+                } catch (e: IllegalArgumentException) {
+                    ByteArray(0)
+                }
+            } else ByteArray(0)
 
             // Pass PQC key when:
             //  (a) decapsulating inbound KEM from a received message, OR
@@ -459,6 +526,7 @@ class MessageRepositoryImpl @Inject constructor(
                     displayName = remoteUserId.take(8),
                     publicIdentityKey = pubIdKey,
                     publicSigningKey = pubSignKey,
+                    pqcSigningKey = pqcSignKey,
                     pqcEstablished = sessionKeys.pqcEstablished,
                 ))
             } else {
@@ -476,7 +544,10 @@ class MessageRepositoryImpl @Inject constructor(
                         "contact was hybrid PQ, refusing classical-only session")
                     return null
                 } else if (sessionKeys.pqcEstablished && !existingContact.pqcEstablished) {
-                    contactDao.upsert(existingContact.copy(pqcEstablished = true))
+                    contactDao.upsert(existingContact.copy(
+                        pqcEstablished = true,
+                        pqcSigningKey = pqcSignKey,
+                    ))
                 }
             }
 
@@ -626,6 +697,11 @@ class MessageRepositoryImpl @Inject constructor(
         } else {
             existingContact?.publicSigningKey
         }
+        val pqcSignKey = if (bundle != null && bundle.pqcSigningKey.isNotEmpty()) {
+            try { Base64.decode(bundle.pqcSigningKey, Base64.NO_WRAP) } catch (_: Exception) { null }
+        } else {
+            existingContact?.pqcSigningKey?.takeIf { it.isNotEmpty() }
+        }
         val pubIdKey = if (bundle != null) {
             try { Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP) } catch (_: Exception) { null }
         } else {
@@ -663,6 +739,33 @@ class MessageRepositoryImpl @Inject constructor(
             receivedIds.add(dto.messageId)
             return true
         }
+        // ML-DSA-65 verification for control messages.
+        // If the sender has a PQC signing key, the signature is REQUIRED.
+        // Skip without ACKing (don't add to receivedIds) so the message is retried
+        // on next sync — the sender may have just upgraded to PQC and our local
+        // contact DB hasn't received their signing key yet.
+        if (pqcSignKey != null && pqcSignKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                "$ctrl ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}")
+            return true
+        }
+        if (dto.pqcSignature.isNotEmpty() && pqcSignKey != null && pqcSignKey.isNotEmpty()) {
+            val pqcSig = try {
+                Base64.decode(dto.pqcSignature, Base64.NO_WRAP)
+            } catch (_: Exception) {
+                receivedIds.add(dto.messageId)
+                return true
+            }
+            val pqcValid = try {
+                pqcProvider.verify(sigPayload, pqcSig, pqcSignKey)
+            } catch (_: Exception) { false }
+            if (!pqcValid) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                    "$ctrl ML-DSA signature invalid from ${dto.senderId.take(8)}")
+                receivedIds.add(dto.messageId)
+                return true
+            }
+        }
 
         if (!isAccountDeleted && existingContact != null && pubIdKey != null) {
             // Update the contact's stored keys to the new ones.
@@ -671,6 +774,7 @@ class MessageRepositoryImpl @Inject constructor(
             contactDao.upsert(existingContact.copy(
                 publicSigningKey = pubSignKey,
                 publicIdentityKey = pubIdKey,
+                pqcSigningKey = pqcSignKey ?: ByteArray(0),
                 pqcEstablished = false,
             ))
         }
@@ -727,10 +831,28 @@ class MessageRepositoryImpl @Inject constructor(
         sessionResetSentTo.remove(contactId)
     }
 
+    /** Sign data with ML-DSA-65 if keys are available, returning base64 or empty string. */
+    private fun signWithMlDsa(data: ByteArray): String {
+        return try {
+            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey() ?: return ""
+            try {
+                Base64.encodeToString(pqcProvider.sign(data, mlDsaPrivKey), Base64.NO_WRAP)
+            } finally {
+                mlDsaPrivKey.fill(0)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MessageRepo", "ML-DSA signing failed: ${e.message}")
+            ""
+        }
+    }
+
     companion object {
         /** After this many failed decrypt attempts, acknowledge the message to
          *  prevent it from poisoning the pending queue forever. */
         private const val MAX_DECRYPT_RETRIES = 3
+        /** Sync cycles to skip a message with a missing PQC signature before
+         *  permanently rejecting it (gives time for key bundle propagation). */
+        private const val MAX_PQC_SIG_MISS_RETRIES = 3
 
         /** Evict stale entries from in-memory maps when they exceed this size. */
         private const val PRUNE_THRESHOLD = 200

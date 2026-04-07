@@ -121,7 +121,8 @@ class WebSocketManager:
     async def flush_pending_signals(self, user_id: str, websocket: WebSocket) -> None:
         """Deliver pending call signals to a newly connected user."""
         now = time.monotonic()
-        signals = self._pending_call_signals.pop(user_id, [])
+        async with self._lock:
+            signals = self._pending_call_signals.pop(user_id, [])
         for ts, payload in signals:
             if now - ts > _PENDING_SIGNAL_TTL:
                 continue  # expired
@@ -131,15 +132,16 @@ class WebSocketManager:
             except Exception:
                 pass
 
-    def _store_pending_signal(self, recipient_id: str, payload: str) -> None:
+    async def _store_pending_signal(self, recipient_id: str, payload: str) -> None:
         """Buffer a call signal for a user who is currently offline."""
         now = time.monotonic()
-        pending = self._pending_call_signals.setdefault(recipient_id, [])
-        # Evict expired entries
-        pending[:] = [(ts, p) for ts, p in pending if now - ts <= _PENDING_SIGNAL_TTL]
-        # Cap at a reasonable number to prevent abuse
-        if len(pending) < 20:
-            pending.append((now, payload))
+        async with self._lock:
+            pending = self._pending_call_signals.setdefault(recipient_id, [])
+            # Evict expired entries
+            pending[:] = [(ts, p) for ts, p in pending if now - ts <= _PENDING_SIGNAL_TTL]
+            # Cap at a reasonable number to prevent abuse
+            if len(pending) < 20:
+                pending.append((now, payload))
 
     async def relay_call_signal(
         self,
@@ -149,6 +151,8 @@ class WebSocketManager:
         call_id: str,
         encrypted_payload: str,
         signature: str = "",
+        pqc_signature: str = "",
+        kem_ciphertext: str = "",
     ) -> bool:
         """Relay an opaque encrypted call signal to the recipient.
 
@@ -157,17 +161,22 @@ class WebSocketManager:
         async with self._lock:
             sockets = list(self._connections.get(recipient_id, {}))
 
-        payload = json.dumps({
+        msg: dict[str, str] = {
             "type": signal_type,
             "sender_id": sender_id,
             "call_id": call_id,
             "encrypted_payload": encrypted_payload,
             "signature": signature,
-        })
+        }
+        if pqc_signature:
+            msg["pqc_signature"] = pqc_signature
+        if kem_ciphertext:
+            msg["kem_ciphertext"] = kem_ciphertext
+        payload = json.dumps(msg)
 
         if not sockets:
             # Recipient offline — buffer the signal for delivery when they connect
-            self._store_pending_signal(recipient_id, payload)
+            await self._store_pending_signal(recipient_id, payload)
             return False
 
         delivered = False

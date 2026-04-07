@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.remote
 
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.data.remote.dto.CallSignalDto
 import com.chatcontroll.app.domain.repository.MessageRepository
 import android.util.Base64
@@ -43,6 +44,7 @@ import javax.inject.Singleton
 @Singleton
 class WebSocketClient @Inject constructor(
     private val keyManager: KeyManager,
+    private val pqcProvider: PqcProvider,
     private val messageRepository: dagger.Lazy<MessageRepository>,
 ) {
     private companion object {
@@ -109,12 +111,8 @@ class WebSocketClient @Inject constructor(
     }
 
     private fun generateAuthToken(): String? {
-        val uid = keyManager.getUserId() ?: return null
-        val ts = System.currentTimeMillis().toString()
-        val payload = "$uid.$ts"
-        val signature = keyManager.sign(payload.toByteArray(Charsets.UTF_8))
-        val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
-        return "$payload.$sigB64"
+        if (keyManager.getUserId() == null) return null
+        return keyManager.generateAuthToken(pqcProvider)
     }
 
     private suspend fun connectWebSocket() {
@@ -184,13 +182,15 @@ class WebSocketClient @Inject constructor(
                 "pong" -> { /* Expected keepalive response */ }
 
                 "call_offer", "call_answer", "call_ice_candidate",
-                "call_hangup", "call_busy", "call_reject" -> {
+                "call_hangup", "call_busy", "call_reject", "call_ringing" -> {
                     val signal = CallSignalDto(
                         senderId = msg["sender_id"]?.jsonPrimitive?.content ?: return,
                         signalType = msg["type"]?.jsonPrimitive?.content ?: return,
                         callId = msg["call_id"]?.jsonPrimitive?.content ?: "",
                         encryptedPayload = msg["encrypted_payload"]?.jsonPrimitive?.content ?: "",
                         signature = msg["signature"]?.jsonPrimitive?.content ?: "",
+                        pqcSignature = msg["pqc_signature"]?.jsonPrimitive?.content ?: "",
+                        kemCiphertext = msg["kem_ciphertext"]?.jsonPrimitive?.content ?: "",
                     )
                     _incomingCallSignals.tryEmit(signal)
                 }

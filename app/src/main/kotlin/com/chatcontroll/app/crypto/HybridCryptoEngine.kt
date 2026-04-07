@@ -67,20 +67,35 @@ class HybridCryptoEngine @Inject constructor(
         if (inboundKemCiphertext != null) {
             val dk = keyManager.getPqcDecapsulationKey()
                 ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
-            pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
+            try {
+                pqSecret = pqcProvider.decapsulate(inboundKemCiphertext, dk)
+            } finally {
+                dk.fill(0)
+            }
         } else if (remotePublicBundle.pqcEncapsulationKey.isNotEmpty()) {
+            // WARNING: The KEM ciphertext (encapsulation.ciphertext) is discarded here.
+            // The remote peer needs it to decapsulate, so PQC session establishment
+            // will fail. This engine is a non-production fallback — use
+            // RatchetSessionManager for production, which correctly attaches the
+            // ciphertext to the first outbound message header.
             val encapsulation = pqcProvider.encapsulate(remotePublicBundle.pqcEncapsulationKey)
             pqSecret = encapsulation.sharedSecret
         }
 
-        // Combine via HKDF
-        val ikm = if (pqSecret.isNotEmpty()) classicalSecret + pqSecret else classicalSecret
+        // Combine via HKDF, then zeroize inputs.
+        // In the PQC path, `+` creates a new array so classicalSecret can be
+        // zeroized independently. In classical-only, copyOf() avoids aliasing.
+        val isPqcEstablished = pqSecret.isNotEmpty()
+        val ikm = if (isPqcEstablished) classicalSecret + pqSecret else classicalSecret.copyOf()
+        classicalSecret.fill(0)
+        pqSecret.fill(0)
         val combinedSecret = hkdfSha256(
             ikm = ikm,
             salt = "ChatControll-v1-session".toByteArray(),
             info = "hybrid-key-establishment".toByteArray(),
             length = 64,
         )
+        ikm.fill(0)
 
         // Sort keys so both peers compute the same sessionId regardless of role
         val localHex = localIdentity.publicIdentityKey.joinToString("") { "%02x".format(it) }
@@ -95,12 +110,13 @@ class HybridCryptoEngine @Inject constructor(
         // Deterministic key assignment so both sides agree
         val keyA = combinedSecret.copyOfRange(0, 32)
         val keyB = combinedSecret.copyOfRange(32, 64)
+        combinedSecret.fill(0)
 
         return SessionKeys(
             sendKey = if (isInitiator) keyA else keyB,
             receiveKey = if (isInitiator) keyB else keyA,
             sessionId = sessionId,
-            pqcEstablished = pqSecret.isNotEmpty(),
+            pqcEstablished = isPqcEstablished,
         )
     }
 
@@ -170,10 +186,16 @@ internal fun hkdfSha256(ikm: ByteArray, salt: ByteArray, info: ByteArray, length
         mac.update(t)
         mac.update(info)
         mac.update(i.toByte())
+        val prev = t
         t = mac.doFinal()
+        if (prev.isNotEmpty()) prev.fill(0)
         System.arraycopy(t, 0, output, (i - 1) * hashLen, hashLen)
     }
-    return output.copyOfRange(0, length)
+    t.fill(0)
+    prk.fill(0)
+    val result = output.copyOfRange(0, length)
+    output.fill(0)
+    return result
 }
 
 private fun sha256Hex(data: ByteArray): String {

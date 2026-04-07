@@ -22,8 +22,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-
 from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_ENABLED, TURN_RELAY_IP, TURN_SECRET
 from sqlalchemy import text
 
@@ -148,35 +146,74 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ChatControll Relay",
     description="Privacy-first encrypted message relay server.",
-    version="0.3.5",
+    version="0.4.0",
     lifespan=lifespan,
     # Disable docs in production
     docs_url="/docs" if DEBUG else None,
     redoc_url=None,
 )
 
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject HTTP requests whose body exceeds the configured limit.
+class BodySizeLimitMiddleware:
+    """ASGI middleware that rejects requests whose body exceeds the limit.
 
-    Checks Content-Length header when present, then also verifies the
-    actual body size for chunked/streamed requests.
+    Checks Content-Length header when present, and also wraps the ASGI
+    receive channel to count bytes as they stream in — protecting against
+    chunked-encoded requests that omit Content-Length.
     """
 
-    async def dispatch(self, request: Request, call_next):
-        content_length = request.headers.get("content-length")
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(
+            (k.lower(), v)
+            for k, v in (scope.get("headers") or [])
+        )
+        content_length = headers.get(b"content-length")
         if content_length is not None:
             try:
                 cl = int(content_length)
             except (ValueError, TypeError):
-                return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+                response = JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+                await response(scope, receive, send)
+                return
             if cl < 0 or cl > MAX_REQUEST_BODY_BYTES:
-                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
-        # For chunked requests (no Content-Length), check actual body size
-        if content_length is None and request.method in ("POST", "PUT", "PATCH"):
-            body = await request.body()
-            if len(body) > MAX_REQUEST_BODY_BYTES:
-                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
-        return await call_next(request)
+                response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
+                await response(scope, receive, send)
+                return
+
+        # Wrap receive to track cumulative body size for chunked requests
+        total_bytes = 0
+        response_started = False
+
+        class _BodyTooLarge(Exception):
+            pass
+
+        async def counting_receive():
+            nonlocal total_bytes
+            msg = await receive()
+            if msg["type"] == "http.request":
+                total_bytes += len(msg.get("body", b""))
+                if total_bytes > MAX_REQUEST_BODY_BYTES:
+                    raise _BodyTooLarge()
+            return msg
+
+        async def tracking_send(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, counting_receive, tracking_send)
+        except _BodyTooLarge:
+            if not response_started:
+                response = JSONResponse(status_code=413, content={"detail": "Request body too large"})
+                await response(scope, receive, send)
 
 
 app.add_middleware(BodySizeLimitMiddleware)

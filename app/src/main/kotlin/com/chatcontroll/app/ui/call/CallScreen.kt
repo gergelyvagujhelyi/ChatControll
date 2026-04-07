@@ -150,7 +150,7 @@ fun CallScreen(
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = statusText(callState?.status, callState?.direction),
+                text = statusText(callState?.status, callState?.direction, callState?.peerDisplayName),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
             )
@@ -158,7 +158,8 @@ fun CallScreen(
             // Call duration
             if (callState?.status == CallStatus.CONNECTED) {
                 Spacer(modifier = Modifier.height(8.dp))
-                CallDurationTimer(connectedAt = callState?.connectedAt ?: System.currentTimeMillis())
+                val fallback = remember { System.currentTimeMillis() }
+                CallDurationTimer(connectedAt = callState?.connectedAt ?: fallback)
             }
 
             // Relay unavailable warning
@@ -279,9 +280,9 @@ fun CallScreen(
                 }
             }
             else -> {
-                // Ringing outgoing or connecting: just cancel
+                // Non-active state: hangup (no-op if terminal), LaunchedEffect handles dismiss
                 FilledIconButton(
-                    onClick = viewModel::hangup,
+                    onClick = { viewModel.hangup() },
                     modifier = Modifier.size(72.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -318,9 +319,9 @@ private fun CallDurationTimer(connectedAt: Long) {
     )
 }
 
-private fun statusText(status: CallStatus?, direction: CallDirection?): String = when (status) {
+private fun statusText(status: CallStatus?, direction: CallDirection?, peerName: String? = null): String = when (status) {
     CallStatus.RINGING -> if (direction == CallDirection.INCOMING) "Incoming call..." else "Ringing..."
-    CallStatus.CONNECTING -> "Connecting..."
+    CallStatus.CONNECTING -> if (direction == CallDirection.OUTGOING && peerName != null) "Connecting to $peerName..." else "Connecting..."
     CallStatus.CONNECTED -> "Connected"
     CallStatus.ENDED -> "Call ended"
     CallStatus.FAILED -> "Call failed"

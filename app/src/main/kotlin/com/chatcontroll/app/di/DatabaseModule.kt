@@ -33,9 +33,15 @@ object DatabaseModule {
     ): AppDatabase {
         val dbKey = keyManager.getDatabaseKey()
         val passphrase = dbKey.joinToString("") { "%02x".format(it) }.toByteArray()
+        dbKey.fill(0)
 
         val factory = SupportOpenHelperFactory(passphrase)
 
+        // NOTE: do NOT zeroize `passphrase` — SupportOpenHelperFactory stores a
+        // reference (not a copy) and reuses it every time Room opens a new
+        // SQLite connection (e.g. for concurrent queries on different threads).
+        // Zeroizing it causes "file is not a database" crashes on later queries.
+        // The raw key material (`dbKey`) is already zeroized above.
         return try {
             buildDatabase(context, factory).also {
                 // Force open to detect SQLCipher errors early
@@ -83,6 +89,24 @@ object DatabaseModule {
         }
     }
 
+    /** v6→v7: add pqcSigningKey column to contacts for ML-DSA-65 post-quantum authentication. */
+    private val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            val cursor = db.query("PRAGMA table_info(contacts)")
+            var hasColumn = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "pqcSigningKey") {
+                    hasColumn = true
+                    break
+                }
+            }
+            cursor.close()
+            if (!hasColumn) {
+                db.execSQL("ALTER TABLE contacts ADD COLUMN pqcSigningKey BLOB NOT NULL DEFAULT x''")
+            }
+        }
+    }
+
     /** v5→v6: add unique index on conversations.contactId to prevent duplicate rows per contact. */
     private val MIGRATION_5_6 = object : Migration(5, 6) {
         override fun migrate(db: SupportSQLiteDatabase) {
@@ -108,7 +132,7 @@ object DatabaseModule {
             DB_NAME,
         )
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             .fallbackToDestructiveMigration()
             .build()
     }

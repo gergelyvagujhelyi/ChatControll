@@ -8,7 +8,7 @@ import android.util.Base64
 import android.util.Log
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
-import com.chatcontroll.app.crypto.hkdfSha256
+import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.crypto.lengthPrefixed
 import com.chatcontroll.app.data.remote.ApiService
 import com.chatcontroll.app.data.remote.WebSocketClient
@@ -47,6 +47,7 @@ import kotlinx.serialization.json.Json
 import org.webrtc.IceCandidate
 import org.webrtc.PeerConnection
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -57,6 +58,7 @@ class CallManager @Inject constructor(
     private val keyManager: KeyManager,
     private val cryptoEngine: CryptoEngine,
     private val classicalKeyAgreement: com.chatcontroll.app.crypto.ClassicalKeyAgreement,
+    private val pqcProvider: PqcProvider,
     private val webSocketClient: WebSocketClient,
     private val contactDao: com.chatcontroll.app.data.local.dao.ContactDao,
     private val messageDao: MessageDao,
@@ -81,6 +83,7 @@ class CallManager @Inject constructor(
     val callState: StateFlow<CallState?> = _callState.asStateFlow()
 
     private val signalMutex = kotlinx.coroutines.sync.Mutex()
+    private val sessionKeyMutex = kotlinx.coroutines.sync.Mutex()
     private var ringingTimeoutJob: Job? = null
     private val pendingIceCandidates = java.util.Collections.synchronizedList(mutableListOf<IceCandidateDto>())
     @Volatile
@@ -91,6 +94,8 @@ class CallManager @Inject constructor(
      *  Entries survive endCall() and are evicted after [SIGNATURE_TTL_MS].
      *  Insertion order (accessOrder=false) so time-based eviction is correct. */
     private val seenSignalSignatures = LinkedHashMap<String, Long>(64, 0.75f, false)
+    /** Guards [endCall] against concurrent invocation — only the first caller proceeds. */
+    private val endCallGuard = AtomicBoolean(false)
     private val _callError = MutableStateFlow<String?>(null)
     val callError: StateFlow<String?> = _callError.asStateFlow()
 
@@ -102,13 +107,17 @@ class CallManager @Inject constructor(
             return
         }
 
+        // Reset the guard so endCall() works for this new call. A previous
+        // call's delayed cleanup coroutine may not have reset it yet.
+        endCallGuard.set(false)
+
         val callId = UUID.randomUUID().toString()
         _callState.value = CallState(
             callId = callId,
             peerId = peerId,
             peerDisplayName = peerDisplayName,
             direction = CallDirection.OUTGOING,
-            status = CallStatus.RINGING,
+            status = CallStatus.CONNECTING,
         )
 
         scope.launch {
@@ -126,11 +135,10 @@ class CallManager @Inject constructor(
                     return@launch
                 }
                 if (result) {
-                    logDebug("call_offer delivered via WebSocket")
+                    logDebug("call_offer delivered via WebSocket — waiting for call_ringing confirmation")
                 } else {
                     logDebug("call_offer buffered by server — waiting for FCM to wake recipient")
                 }
-                // Start ringing timeout — if no answer within the limit, give up
                 startRingingTimeout(callId)
             } catch (e: Exception) {
                 logError("Failed to initiate call", e)
@@ -176,12 +184,35 @@ class CallManager @Inject constructor(
                     lengthPrefixed(localUserId.toByteArray(Charsets.UTF_8)) +
                     lengthPrefixed(signal.signalType.toByteArray(Charsets.UTF_8)) +
                     lengthPrefixed(signal.callId.toByteArray(Charsets.UTF_8)) +
-                    signal.encryptedPayload.toByteArray(Charsets.UTF_8)
+                    lengthPrefixed(signal.encryptedPayload.toByteArray(Charsets.UTF_8)) +
+                    lengthPrefixed(signal.kemCiphertext.toByteArray(Charsets.UTF_8))
                 val sig = Base64.decode(signal.signature, Base64.NO_WRAP)
                 val valid = cryptoEngine.verify(sigPayload, sig, contact.publicSigningKey)
                 if (!valid) {
                     logWarn("Call signal signature verification failed for ${signal.senderId.take(8)}")
                     return@launch
+                }
+                // ML-DSA-65 post-quantum signature verification.
+                // If the contact has a PQC signing key, the signature is REQUIRED —
+                // allowing it to be omitted would let an attacker who breaks Ed25519
+                // bypass the hybrid auth model (same enforcement as MessageRepositoryImpl).
+                if (contact.pqcSigningKey.isNotEmpty() && signal.pqcSignature.isEmpty()) {
+                    logWarn("ML-DSA signature missing from PQC-capable sender ${signal.senderId.take(8)}")
+                    return@launch
+                }
+                if (signal.pqcSignature.isNotEmpty() && contact.pqcSigningKey.isNotEmpty()) {
+                    try {
+                        val pqcSig = Base64.decode(signal.pqcSignature, Base64.NO_WRAP)
+                        val pqcValid = pqcProvider.verify(sigPayload, pqcSig, contact.pqcSigningKey)
+                        if (!pqcValid) {
+                            logWarn("ML-DSA signature verification failed for ${signal.senderId.take(8)}")
+                            return@launch
+                        }
+                        logDebug("ML-DSA signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
+                    } catch (e: Exception) {
+                        logWarn("ML-DSA verification error for ${signal.senderId.take(8)}: ${e.message}")
+                        return@launch
+                    }
                 }
                 logDebug("Signature verified for ${signal.signalType} from ${signal.senderId.take(8)}")
                 verifiedContact = contact
@@ -220,6 +251,8 @@ class CallManager @Inject constructor(
                         if (_callState.value != null) {
                             // Already in a call — flag for busy signal outside mutex
                         } else {
+                            // Reset the guard for this new inbound call
+                            endCallGuard.set(false)
                             val displayName = verifiedContact.displayName
                             val isNew = _pendingNewContact != null
                             _callState.value = CallState(
@@ -231,12 +264,20 @@ class CallManager @Inject constructor(
                                 isNewContact = isNew,
                             )
                             _pendingOfferPayload = signal.encryptedPayload
+                            // Store KEM ciphertext for hybrid PQC key agreement
+                            if (signal.kemCiphertext.isNotEmpty()) {
+                                _pendingInboundKemCiphertext = Base64.decode(signal.kemCiphertext, Base64.NO_WRAP)
+                            }
                         }
                     }
                     "call_answer" -> {
                         val state = _callState.value
                         if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
                             logWarn("Ignoring answer: no matching active call")
+                            return@launch
+                        }
+                        if (state.status in TERMINAL_STATUSES) {
+                            logDebug("Ignoring call_answer: call already ended")
                             return@launch
                         }
                         _callState.value = state.copy(status = CallStatus.CONNECTING)
@@ -247,6 +288,18 @@ class CallManager @Inject constructor(
                             logDebug("Ignoring ICE candidate: no matching active call")
                             return@launch
                         }
+                    }
+                    "call_ringing" -> {
+                        val state = _callState.value
+                        if (state == null || signal.senderId != state.peerId || signal.callId != state.callId) {
+                            logDebug("Ignoring call_ringing: no matching active call")
+                            return@launch
+                        }
+                        if (state.direction == CallDirection.OUTGOING && state.status == CallStatus.CONNECTING && !remoteDescriptionSet) {
+                            _callState.value = state.copy(status = CallStatus.RINGING)
+                            logDebug("Peer confirmed ringing")
+                        }
+                        return@launch
                     }
                     "call_hangup", "call_reject", "call_busy" -> {
                         val state = _callState.value
@@ -269,7 +322,8 @@ class CallManager @Inject constructor(
                 when (signal.signalType) {
                     "call_offer" -> {
                         if (_callState.value?.callId == signal.callId) {
-                            // Offer accepted — start callee ringing timeout
+                            // Confirm to the caller that we're ringing
+                            sendSignal(signal.senderId, "call_ringing", signal.callId, "")
                             startCalleeRingingTimeout(signal.callId)
                         } else {
                             // Already in a call — send busy outside the mutex
@@ -353,6 +407,7 @@ class CallManager @Inject constructor(
 
     fun hangup() {
         val state = _callState.value ?: return
+        if (state.status in TERMINAL_STATUSES) return
         endCall(CallStatus.ENDED)
         scope.launch {
             val result = sendSignal(state.peerId, "call_hangup", state.callId, "")
@@ -391,6 +446,12 @@ class CallManager @Inject constructor(
 
     @Volatile
     private var _pendingOfferPayload: String? = null
+    /** KEM ciphertext received in an incoming call_offer — used by responder to decapsulate. */
+    @Volatile
+    private var _pendingInboundKemCiphertext: ByteArray? = null
+    /** KEM ciphertext generated by the initiator — attached to the call_offer signal. */
+    @Volatile
+    private var _pendingOutboundKemCiphertext: String? = null
     /** Contact fetched from the server for an unknown caller — persisted only on accept. */
     @Volatile
     private var _pendingNewContact: com.chatcontroll.app.data.local.entity.ContactEntity? = null
@@ -400,7 +461,7 @@ class CallManager @Inject constructor(
         ringingTimeoutJob = scope.launch {
             kotlinx.coroutines.delay(RINGING_TIMEOUT_MS)
             val state = _callState.value
-            if (state != null && state.callId == callId && state.status == CallStatus.RINGING) {
+            if (state != null && state.callId == callId && state.status in setOf(CallStatus.RINGING, CallStatus.CONNECTING)) {
                 logWarn("Ringing timeout — no answer after ${RINGING_TIMEOUT_MS / 1000}s")
                 sendSignal(state.peerId, "call_hangup", callId, "")
                 endCall(CallStatus.UNAVAILABLE)
@@ -424,9 +485,14 @@ class CallManager @Inject constructor(
 
     /** Process answer payload — called outside signalMutex after validation. */
     private suspend fun processAnswerPayload(signal: CallSignalDto) {
+        // Guard against call ending between mutex release and here — without this
+        // check, requestAudioFocus() could leave AudioManager in MODE_IN_COMMUNICATION
+        // after endCall() has already called abandonAudioFocus().
+        if (webRtcEngine == null || _callState.value?.status in TERMINAL_STATUSES) return
+
         val sdpJson = decryptPayload(signal.senderId, signal.callId, signal.encryptedPayload)
         val sdpPayload = json.decodeFromString<SdpPayload>(sdpJson)
-        webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp)
+        webRtcEngine?.handleRemoteAnswer(sdpPayload.sdp) ?: return
 
         remoteDescriptionSet = true
         drainPendingIceCandidates()
@@ -462,6 +528,9 @@ class CallManager @Inject constructor(
     }
 
     private fun endCall(status: CallStatus) {
+        // Only the first concurrent invocation proceeds — prevents double-dispose
+        // of native WebRTC resources and double-zeroization of session keys.
+        if (!endCallGuard.compareAndSet(false, true)) return
         val endingState = _callState.value
         _callState.value = endingState?.copy(status = status)
         ringingTimeoutJob?.cancel()
@@ -469,6 +538,8 @@ class CallManager @Inject constructor(
         val engine = webRtcEngine
         webRtcEngine = null
         _pendingOfferPayload = null
+        _pendingInboundKemCiphertext = null
+        _pendingOutboundKemCiphertext = null
         // Clear _pendingNewContact under signalMutex to stay consistent with
         // acceptCall() and handleIncomingSignal(). Launch a coroutine so we
         // can properly acquire the suspending Mutex instead of using tryLock,
@@ -515,6 +586,8 @@ class CallManager @Inject constructor(
             if (_callState.value?.callId == endedCallId) {
                 _callState.value = null
             }
+            // Reset guard so the next call can use endCall()
+            endCallGuard.set(false)
         }
     }
 
@@ -704,7 +777,7 @@ class CallManager @Inject constructor(
                     _callState.update { state ->
                         state?.copy(
                             status = CallStatus.CONNECTED,
-                            connectedAt = System.currentTimeMillis(),
+                            connectedAt = state.connectedAt ?: System.currentTimeMillis(),
                         )
                     }
                 }
@@ -732,18 +805,39 @@ class CallManager @Inject constructor(
     private suspend fun sendSignal(peerId: String, signalType: String, callId: String, payload: String): Boolean? {
         val encrypted = if (payload.isNotEmpty()) encryptPayload(peerId, callId, payload) else ""
         val senderId = keyManager.getUserId() ?: return null
+        // Attach KEM ciphertext to the call_offer (initiator → responder)
+        val kemCt = if (signalType == "call_offer") {
+            _pendingOutboundKemCiphertext.also { _pendingOutboundKemCiphertext = null } ?: ""
+        } else ""
         val sigPayload = lengthPrefixed(senderId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(peerId.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(signalType.toByteArray(Charsets.UTF_8)) +
             lengthPrefixed(callId.toByteArray(Charsets.UTF_8)) +
-            encrypted.toByteArray(Charsets.UTF_8)
+            lengthPrefixed(encrypted.toByteArray(Charsets.UTF_8)) +
+            lengthPrefixed(kemCt.toByteArray(Charsets.UTF_8))
         val signature = Base64.encodeToString(keyManager.sign(sigPayload), Base64.NO_WRAP)
+        // ML-DSA-65 post-quantum signature (if local keys are available)
+        val pqcSig = try {
+            val mlDsaPrivKey = keyManager.getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    Base64.encodeToString(pqcProvider.sign(sigPayload, mlDsaPrivKey), Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (e: Exception) {
+            logWarn("ML-DSA signing failed, sending without PQC signature: ${e.message}")
+            ""
+        }
         val request = CallSignalRequest(
             recipientId = peerId,
             signalType = signalType,
             callId = callId,
             encryptedPayload = encrypted,
             signature = signature,
+            pqcSignature = pqcSig,
+            kemCiphertext = kemCt,
         )
         repeat(SIGNAL_SEND_RETRIES) { attempt ->
             try {
@@ -773,11 +867,15 @@ class CallManager @Inject constructor(
             val bundle = apiService.fetchKeyBundle(userId) ?: return null
             val pubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
             val pubSignKey = Base64.decode(bundle.publicSigningKey, Base64.NO_WRAP)
+            val pqcSignKey = if (bundle.pqcSigningKey.isNotEmpty()) {
+                Base64.decode(bundle.pqcSigningKey, Base64.NO_WRAP)
+            } else ByteArray(0)
             com.chatcontroll.app.data.local.entity.ContactEntity(
                 userId = userId,
                 displayName = userId.take(8),
                 publicIdentityKey = pubIdKey,
                 publicSigningKey = pubSignKey,
+                pqcSigningKey = pqcSignKey,
             )
         } catch (e: Exception) {
             logError("Failed to fetch key bundle for ${userId.take(8)}", e)
@@ -802,66 +900,110 @@ class CallManager @Inject constructor(
         // Fast path: already derived for this peer during this call
         _callSessionKeys[peerId]?.let { return it }
 
-        val bundle = apiService.fetchKeyBundle(peerId)
-            ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
-        val remotePubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
+        // Serialize key derivation — concurrent ICE candidate coroutines must not
+        // race through the KEM branch logic. Without this lock, a second racer
+        // finds _pendingInboundKemCiphertext already consumed (null), enters the
+        // encapsulate (initiator) branch, and derives different keys.
+        return sessionKeyMutex.withLock {
+            // Re-check inside lock — another coroutine may have derived while we waited
+            _callSessionKeys[peerId]?.let { return@withLock it }
 
-        val localKeyPair = keyManager.loadIdentityKeyPair()
-            ?: throw IllegalStateException("No local identity key pair")
+            val bundle = apiService.fetchKeyBundle(peerId)
+                ?: throw IllegalStateException("Cannot fetch key bundle for $peerId")
+            val remotePubIdKey = Base64.decode(bundle.publicIdentityKey, Base64.NO_WRAP)
 
-        // X25519 shared secret
-        val classicalSecret = classicalKeyAgreement.agree(
-            privateKey = localKeyPair.privateIdentityKey,
-            remotePublicKey = remotePubIdKey,
-        )
+            val localKeyPair = keyManager.loadIdentityKeyPair()
+                ?: throw IllegalStateException("No local identity key pair")
 
-        // Derive base shared secret (same HKDF as RatchetSessionManager, no PQC)
-        val sharedSecret = hkdfSha256(
-            ikm = classicalSecret,
-            salt = "ChatControll-v1-ratchet-init".toByteArray(Charsets.UTF_8),
-            info = "hybrid-key-establishment".toByteArray(Charsets.UTF_8),
-            length = 32,
-        )
-        classicalSecret.fill(0)
+            // X25519 shared secret
+            val classicalSecret = classicalKeyAgreement.agree(
+                privateKey = localKeyPair.privateIdentityKey,
+                remotePublicKey = remotePubIdKey,
+            )
 
-        // Derive bidirectional chain keys
-        val chainMaterial = hkdfSha256(
-            ikm = sharedSecret,
-            salt = "ChatControll-v1-chains".toByteArray(Charsets.UTF_8),
-            info = "bidirectional-chains".toByteArray(Charsets.UTF_8),
-            length = 64,
-        )
-        sharedSecret.fill(0)
+            // Deterministic initiator role: same comparison as RatchetSessionManager
+            val isInitiator = localKeyPair.publicIdentityKey.toCallHex() < remotePubIdKey.toCallHex()
 
-        val chainA = chainMaterial.copyOfRange(0, 32)
-        val chainB = chainMaterial.copyOfRange(32, 64)
-        chainMaterial.fill(0)
+            // PQC KEM handshake — mirrors RatchetSessionManager.establishSession()
+            var pqcSecret = ByteArray(0)
+            val inboundKem = _pendingInboundKemCiphertext
+            _pendingInboundKemCiphertext = null
 
-        // Deterministic role: same comparison as RatchetSessionManager
-        val isInitiator = localKeyPair.publicIdentityKey.toCallHex() < remotePubIdKey.toCallHex()
+            if (inboundKem != null) {
+                // Responder: decapsulate the KEM ciphertext from the call_offer
+                val decapsulationKey = keyManager.getPqcDecapsulationKey()
+                    ?: throw IllegalStateException("Received KEM ciphertext but no local decapsulation key")
+                try {
+                    pqcSecret = pqcProvider.decapsulate(inboundKem, decapsulationKey)
+                } finally {
+                    decapsulationKey.fill(0)
+                }
+            } else if (bundle.pqcEncapsulationKey.isNotEmpty()) {
+                // Initiator: encapsulate against peer's ML-KEM public key
+                val remotePqcKey = Base64.decode(bundle.pqcEncapsulationKey, Base64.NO_WRAP)
+                val encapsulation = pqcProvider.encapsulate(remotePqcKey)
+                pqcSecret = encapsulation.sharedSecret
+                _pendingOutboundKemCiphertext = Base64.encodeToString(encapsulation.ciphertext, Base64.NO_WRAP)
+            }
 
-        val sessionKeys = SessionKeys(
-            sendKey = if (isInitiator) chainA else chainB,
-            receiveKey = if (isInitiator) chainB else chainA,
-            sessionId = "call-$peerId",
-            pqcEstablished = false,
-        )
+            val isPqcEstablished = pqcSecret.isNotEmpty()
 
-        // Guard: if endCall() ran while we were suspended (e.g. during
-        // fetchKeyBundle), the call is over and _callSessionKeys was already
-        // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
-        val currentCall = _callState.value
-        if (currentCall == null || currentCall.peerId != peerId ||
-            currentCall.status == CallStatus.ENDED || currentCall.status == CallStatus.FAILED
-        ) {
-            sessionKeys.sendKey.fill(0)
-            sessionKeys.receiveKey.fill(0)
-            throw IllegalStateException("Call ended while deriving session keys for $peerId")
+            // Combine classical + PQC secrets via KMACXOF256 KDF, then zeroize inputs
+            val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
+            classicalSecret.fill(0)
+            pqcSecret.fill(0)
+
+            val sharedSecret = shake256Kdf(
+                ikm = ikm,
+                salt = "ChatControll-v1-call-init".toByteArray(Charsets.UTF_8),
+                info = "hybrid-key-establishment".toByteArray(Charsets.UTF_8),
+                length = 32,
+            )
+            ikm.fill(0)
+
+            // Derive bidirectional chain keys
+            val chainMaterial = shake256Kdf(
+                ikm = sharedSecret,
+                salt = "ChatControll-v1-call-chains".toByteArray(Charsets.UTF_8),
+                info = "bidirectional-chains".toByteArray(Charsets.UTF_8),
+                length = 64,
+            )
+            sharedSecret.fill(0)
+
+            val chainA = chainMaterial.copyOfRange(0, 32)
+            val chainB = chainMaterial.copyOfRange(32, 64)
+            chainMaterial.fill(0)
+
+            val sessionKeys = SessionKeys(
+                sendKey = if (isInitiator) chainA else chainB,
+                receiveKey = if (isInitiator) chainB else chainA,
+                sessionId = "call-$peerId",
+                pqcEstablished = isPqcEstablished,
+            )
+            if (isPqcEstablished) {
+                logDebug("PQC hybrid key agreement established for call with ${peerId.take(8)}")
+            }
+
+            // Guard: if endCall() ran while we were suspended (e.g. during
+            // fetchKeyBundle), the call is over and _callSessionKeys was already
+            // zeroized+cleared. Re-inserting keys would leak un-zeroized material.
+            val currentCall = _callState.value
+            if (currentCall == null || currentCall.peerId != peerId ||
+                currentCall.status in TERMINAL_STATUSES
+            ) {
+                sessionKeys.sendKey.fill(0)
+                sessionKeys.receiveKey.fill(0)
+                throw IllegalStateException("Call ended while deriving session keys for $peerId")
+            }
+
+            _callSessionKeys[peerId] = sessionKeys
+            // Update CallState so the UI can display the actual crypto stack
+            if (isPqcEstablished) {
+                _callState.update { it?.copy(pqcEstablished = true) }
+            }
+            logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
+            sessionKeys
         }
-
-        _callSessionKeys[peerId] = sessionKeys
-        logDebug("Derived call session keys for ${peerId.take(8)} (initiator=$isInitiator)")
-        return sessionKeys
     }
 
     /**
@@ -870,7 +1012,7 @@ class CallManager @Inject constructor(
      * key does not expose signals from other calls.
      */
     private fun deriveCallKey(sessionKey: ByteArray, callId: String): ByteArray {
-        return hkdfSha256(
+        return shake256Kdf(
             ikm = sessionKey,
             salt = callId.toByteArray(Charsets.UTF_8),
             info = "ChatControll-call-signal".toByteArray(Charsets.UTF_8),
@@ -889,7 +1031,7 @@ class CallManager @Inject constructor(
         val xored = ByteArray(size) { i ->
             (sessionKeys.sendKey[i].toInt() xor sessionKeys.receiveKey[i].toInt()).toByte()
         }
-        val key = hkdfSha256(
+        val key = shake256Kdf(
             ikm = xored,
             salt = callId.toByteArray(Charsets.UTF_8),
             info = "ChatControll-call-media".toByteArray(Charsets.UTF_8),
@@ -987,7 +1129,33 @@ class CallManager @Inject constructor(
         private const val RINGING_TIMEOUT_MS = 35_000L
         /** Callee ringing timeout — longer than caller's so caller hangup arrives first. */
         private const val CALLEE_RINGING_TIMEOUT_MS = 45_000L
+        private val TERMINAL_STATUSES = setOf(
+            CallStatus.ENDED, CallStatus.FAILED, CallStatus.NO_RELAY,
+            CallStatus.REJECTED, CallStatus.BUSY, CallStatus.UNAVAILABLE,
+        )
     }
+}
+
+/**
+ * KMACXOF256-based key derivation for call encryption (NIST SP 800-185).
+ *
+ * Uses the Keccak sponge construction (SHA-3 family) instead of HMAC-SHA-256
+ * so the entire post-quantum call path avoids SHA-2 dependencies.
+ * KMACXOF256 provides built-in domain separation and input encoding,
+ * eliminating the need for manual length-prefixing.
+ *
+ * Mapping: KMACXOF256(K=ikm, X=salt, S=info, L=length*8)
+ *
+ * Note: BC's [KMAC.doFinal(out, off, len)] uses the XOF variant (right_encode(0)),
+ * which supports arbitrary output lengths.
+ */
+private fun shake256Kdf(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
+    val kmac = org.bouncycastle.crypto.macs.KMAC(256, info)
+    kmac.init(org.bouncycastle.crypto.params.KeyParameter(ikm))
+    kmac.update(salt, 0, salt.size)
+    val output = ByteArray(length)
+    kmac.doFinal(output, 0, length)
+    return output
 }
 
 private fun ByteArray.toCallHex(): String = joinToString("") { "%02x".format(it) }

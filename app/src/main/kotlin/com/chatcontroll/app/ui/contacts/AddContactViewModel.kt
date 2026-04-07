@@ -51,15 +51,15 @@ class AddContactViewModel @Inject constructor(
 
         _state.value = AddContactState.Loading
         viewModelScope.launch {
-            addContact(code)
-                .onSuccess { contact ->
-                    val conversationId = conversationRepository.getOrCreateConversation(contact.userId)
-                    _state.value = AddContactState.Success(contact, conversationId)
-                    _shareCodeInput.value = ""
-                }
-                .onFailure { e ->
-                    _state.value = AddContactState.Error("Failed to add contact. Check the share code and try again.")
-                }
+            try {
+                val contact = addContact(code).getOrThrow()
+                val conversationId = conversationRepository.getOrCreateConversation(contact.userId)
+                _state.value = AddContactState.Success(contact, conversationId)
+                _shareCodeInput.value = ""
+            } catch (e: Exception) {
+                android.util.Log.e("AddContactVM", "Failed to add contact", e)
+                _state.value = AddContactState.Error("Failed to add contact. Check the share code and try again.")
+            }
         }
     }
 

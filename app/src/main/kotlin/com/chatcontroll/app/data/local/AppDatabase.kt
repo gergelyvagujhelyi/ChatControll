@@ -17,7 +17,7 @@ import com.chatcontroll.app.data.local.entity.MessageEntity
         ConversationEntity::class,
         ContactEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

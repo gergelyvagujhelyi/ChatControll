@@ -67,7 +67,7 @@ pytest -v
 | GET | `/health` | Health check |
 | GET | `/metrics` | Prometheus metrics (token-protected) |
 
-All authenticated endpoints require `Authorization: Bearer <user_id>.<timestamp_ms>.<ed25519_signature>` header.
+All authenticated endpoints require `Authorization: Bearer <user_id>.<timestamp_ms>.<ed25519_signature>[.<mldsa65_signature>]` header. The ML-DSA-65 signature is required when the user has a PQC signing key registered (hybrid post-quantum authentication).
 
 ## Production Deployment
 

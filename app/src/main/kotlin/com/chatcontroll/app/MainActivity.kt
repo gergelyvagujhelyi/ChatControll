@@ -126,7 +126,9 @@ class MainActivity : ComponentActivity() {
                         call.direction == CallDirection.INCOMING &&
                         call.status == CallStatus.RINGING
                     ) {
-                        navController.navigate(Routes.call(call.peerId, call.peerDisplayName))
+                        navController.navigate(Routes.call(call.peerId, call.peerDisplayName)) {
+                            launchSingleTop = true
+                        }
                     }
                 }
 

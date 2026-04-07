@@ -88,6 +88,7 @@ async def send_message(
         nonce=request.nonce,
         ephemeral_public_key=request.ephemeral_public_key,
         signature=request.signature,
+        pqc_signature=request.pqc_signature,
         created_at=now,
         timestamp_ms=timestamp_ms,
     )
@@ -145,6 +146,7 @@ async def fetch_pending_messages(
             nonce=msg.nonce,
             ephemeral_public_key=msg.ephemeral_public_key,
             signature=msg.signature or "",
+            pqc_signature=msg.pqc_signature or "",
             timestamp=msg.timestamp_ms or 0,
         )
         for msg in messages

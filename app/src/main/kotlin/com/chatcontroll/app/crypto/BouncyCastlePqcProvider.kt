@@ -3,12 +3,14 @@ package com.chatcontroll.app.crypto
 import org.bouncycastle.jcajce.SecretKeyWithEncapsulation
 import org.bouncycastle.jcajce.spec.KEMExtractSpec
 import org.bouncycastle.jcajce.spec.KEMGenerateSpec
+import org.bouncycastle.jcajce.spec.MLDSAParameterSpec
 import org.bouncycastle.jcajce.spec.MLKEMParameterSpec
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.SecureRandom
 import java.security.Security
+import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.KeyGenerator
@@ -54,10 +56,14 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
         keyGen.init(KEMGenerateSpec(publicKey, "AES"), SecureRandom())
 
         val secretKey = keyGen.generateKey() as SecretKeyWithEncapsulation
-        return KemEncapsulation(
-            ciphertext = secretKey.encapsulation,
-            sharedSecret = secretKey.encoded,
-        )
+        try {
+            return KemEncapsulation(
+                ciphertext = secretKey.encapsulation,
+                sharedSecret = secretKey.encoded,
+            )
+        } finally {
+            tryDestroy(secretKey)
+        }
     }
 
     override fun decapsulate(ciphertext: ByteArray, decapsulationKey: ByteArray): ByteArray {
@@ -67,12 +73,59 @@ class BouncyCastlePqcProvider @Inject constructor() : PqcProvider {
         val keyGen = KeyGenerator.getInstance(ALGORITHM, PROVIDER)
         keyGen.init(KEMExtractSpec(privateKey, ciphertext, "AES"))
 
-        val secretKey = keyGen.generateKey()
-        return secretKey.encoded
+        val secretKey = keyGen.generateKey() as SecretKeyWithEncapsulation
+        try {
+            return secretKey.encoded
+        } finally {
+            tryDestroy(secretKey)
+        }
+    }
+
+    override fun generateSigningKeyPair(): DsaKeyPair {
+        val kpg = KeyPairGenerator.getInstance(DSA_ALGORITHM, PROVIDER)
+        kpg.initialize(MLDSAParameterSpec.ml_dsa_65, SecureRandom())
+        val kp = kpg.generateKeyPair()
+        return DsaKeyPair(
+            publicKey = kp.public.encoded,
+            privateKey = kp.private.encoded,
+        )
+    }
+
+    override fun sign(data: ByteArray, privateKey: ByteArray): ByteArray {
+        val kf = KeyFactory.getInstance(DSA_ALGORITHM, PROVIDER)
+        val privKey = kf.generatePrivate(PKCS8EncodedKeySpec(privateKey))
+        try {
+            val sig = Signature.getInstance(DSA_ALGORITHM, PROVIDER)
+            sig.initSign(privKey)
+            sig.update(data)
+            return sig.sign()
+        } finally {
+            tryDestroy(privKey)
+        }
+    }
+
+    override fun verify(data: ByteArray, signature: ByteArray, publicKey: ByteArray): Boolean {
+        val kf = KeyFactory.getInstance(DSA_ALGORITHM, PROVIDER)
+        val pubKey = kf.generatePublic(X509EncodedKeySpec(publicKey))
+        val sig = Signature.getInstance(DSA_ALGORITHM, PROVIDER)
+        sig.initVerify(pubKey)
+        sig.update(data)
+        return sig.verify(signature)
+    }
+
+    /** Best-effort key zeroization — Android's default Destroyable.destroy() throws. */
+    private fun tryDestroy(key: javax.security.auth.Destroyable) {
+        try {
+            key.destroy()
+        } catch (_: javax.security.auth.DestroyFailedException) {
+            // Android's default implementation doesn't support destroy;
+            // the shared secret was already copied out by the caller.
+        }
     }
 
     companion object {
         private const val ALGORITHM = "ML-KEM"
+        private const val DSA_ALGORITHM = "ML-DSA"
         private const val PROVIDER = "BC"
     }
 }

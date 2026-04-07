@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_SIGNAL_TYPES = frozenset({
     "call_offer", "call_answer", "call_ice_candidate",
-    "call_hangup", "call_busy", "call_reject",
+    "call_hangup", "call_busy", "call_reject", "call_ringing",
 })
 _MAX_CALL_OFFERS_PER_MINUTE = 10
 _MAX_SIGNALS_PER_MINUTE = 100
@@ -81,8 +81,8 @@ async def websocket_endpoint(
         token = msg["token"]
 
         # Verify signed auth token against stored public key
-        parts = token.split(".", 2)
-        if len(parts) != 3:
+        parts = token.split(".")
+        if len(parts) < 3 or len(parts) > 4:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})
             )
@@ -91,25 +91,26 @@ async def websocket_endpoint(
 
         claimed_user_id = parts[0]
         result = await db.execute(
-            select(Identity.public_signing_key).where(
+            select(Identity.public_signing_key, Identity.pqc_signing_key).where(
                 Identity.user_id == claimed_user_id
             )
         )
-        pub_key_b64 = result.scalar_one_or_none()
+        row = result.one_or_none()
         # Explicitly close the DB session after auth to release the connection
         # back to the pool. Without this, the session stays open for the entire
         # WebSocket lifetime (potentially hours), exhausting the pool.
         # NOTE: db is unusable after this point — do not add DB operations below.
         await db.close()
-        if pub_key_b64 is None:
+        if row is None:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})
             )
             await websocket.close(code=4003)
             return
+        pub_key_b64, pqc_signing_key_b64 = row
 
         try:
-            user_id = verify_token(token, pub_key_b64)
+            user_id = verify_token(token, pub_key_b64, pqc_signing_key_b64 or "")
         except ValueError as e:
             await websocket.send_text(
                 json.dumps({"type": "error", "message": "Authentication failed"})
@@ -157,6 +158,8 @@ async def websocket_endpoint(
                 call_id = msg.get("call_id", "")
                 encrypted_payload = msg.get("encrypted_payload", "")
                 signature = msg.get("signature", "")
+                pqc_signature = msg.get("pqc_signature", "")
+                kem_ciphertext = msg.get("kem_ciphertext", "")
 
                 # Validate types and lengths (match REST schema constraints)
                 if (
@@ -164,12 +167,16 @@ async def websocket_endpoint(
                     or not isinstance(call_id, str)
                     or not isinstance(encrypted_payload, str)
                     or not isinstance(signature, str)
+                    or not isinstance(pqc_signature, str)
+                    or not isinstance(kem_ciphertext, str)
                     or not recipient_id
                     or not call_id
                     or len(recipient_id) > 64
                     or len(call_id) > 128
                     or len(encrypted_payload) > 65536
                     or len(signature) > 512
+                    or len(pqc_signature) > 4608
+                    or len(kem_ciphertext) > 2048
                 ):
                     await websocket.send_text(
                         json.dumps({"type": "error", "message": "Invalid call signal"})
@@ -227,6 +234,8 @@ async def websocket_endpoint(
                     call_id=call_id,
                     encrypted_payload=encrypted_payload,
                     signature=signature,
+                    pqc_signature=pqc_signature,
+                    kem_ciphertext=kem_ciphertext,
                 )
 
     except WebSocketDisconnect:

@@ -28,7 +28,7 @@ router = APIRouter(prefix="/v1/calls", tags=["calling"])
 
 _ALLOWED_SIGNAL_TYPES = frozenset({
     "call_offer", "call_answer", "call_ice_candidate",
-    "call_hangup", "call_busy", "call_reject",
+    "call_hangup", "call_busy", "call_reject", "call_ringing",
 })
 
 _MAX_SIGNALS_PER_MINUTE = 100
@@ -77,6 +77,8 @@ async def relay_signal(
         call_id=request.call_id,
         encrypted_payload=request.encrypted_payload,
         signature=request.signature,
+        pqc_signature=request.pqc_signature,
+        kem_ciphertext=request.kem_ciphertext,
     )
 
     # FCM push fallback for call_offer — wake the recipient's app so it

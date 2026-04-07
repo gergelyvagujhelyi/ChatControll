@@ -139,8 +139,8 @@ class RatchetSessionManager @Inject constructor(
         chainMaterial.fill(0)
 
         val dhKeyPair = DhKeyPair(
-            publicKey = localIdentity.publicIdentityKey,
-            privateKey = localIdentity.privateIdentityKey,
+            publicKey = localIdentity.publicIdentityKey.copyOf(),
+            privateKey = localIdentity.privateIdentityKey.copyOf(),
         )
 
         val state = RatchetState(

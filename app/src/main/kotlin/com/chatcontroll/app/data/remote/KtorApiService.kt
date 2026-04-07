@@ -2,6 +2,7 @@ package com.chatcontroll.app.data.remote
 
 import com.chatcontroll.app.BuildConfig
 import com.chatcontroll.app.crypto.KeyManager
+import com.chatcontroll.app.crypto.PqcProvider
 import com.chatcontroll.app.data.remote.dto.AckRequest
 import com.chatcontroll.app.data.remote.dto.BootstrapRequest
 import com.chatcontroll.app.data.remote.dto.BootstrapResponse
@@ -54,6 +55,7 @@ import javax.inject.Singleton
 @Singleton
 class KtorApiService @Inject constructor(
     private val keyManager: KeyManager,
+    private val pqcProvider: PqcProvider,
 ) : ApiService, java.io.Closeable {
 
     private val client = HttpClient(OkHttp) {
@@ -89,17 +91,7 @@ class KtorApiService @Inject constructor(
     private fun userId(): String =
         keyManager.getUserId() ?: throw IllegalStateException("No identity — bootstrap first")
 
-    /**
-     * Generate a signed auth token: ``<user_id>.<timestamp_ms>.<signature_b64>``
-     */
-    private fun authToken(): String {
-        val uid = userId()
-        val ts = System.currentTimeMillis().toString()
-        val payload = "$uid.$ts"
-        val signature = keyManager.sign(payload.toByteArray(Charsets.UTF_8))
-        val sigB64 = Base64.encodeToString(signature, Base64.NO_WRAP)
-        return "$payload.$sigB64"
-    }
+    private fun authToken(): String = keyManager.generateAuthToken(pqcProvider)
 
     override suspend fun bootstrapIdentity(request: BootstrapRequest): BootstrapResponse {
         val response: HttpResponse = client.post("/v1/identity/bootstrap") {
@@ -197,6 +189,9 @@ class KtorApiService @Inject constructor(
         val response: HttpResponse = client.delete("/v1/identity/me") {
             header("Authorization", "Bearer ${authToken()}")
         }
+        // 404 means the identity was already deleted (previous call succeeded
+        // but local wipe failed) — treat as success so retryServerDeletion works.
+        if (response.status.value == 404) return
         check(response.status.isSuccess()) { "Identity deletion failed: ${response.status}" }
     }
 }

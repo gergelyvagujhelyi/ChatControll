@@ -65,6 +65,25 @@ class KeyManager @Inject constructor(
             .apply()
     }
 
+    fun storeMlDsaKeys(publicKey: ByteArray, privateKey: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(KEY_MLDSA_PUBLIC, publicKey.toHex())
+            .putString(KEY_MLDSA_PRIVATE, privateKey.toHex())
+            .apply()
+    }
+
+    fun getMlDsaPublicKey(): ByteArray? {
+        return encryptedPrefs.getString(KEY_MLDSA_PUBLIC, null)?.hexToBytes()
+    }
+
+    /**
+     * Returns the ML-DSA-65 private signing key. Caller MUST zeroize the returned
+     * array after use via `fill(0)` to limit key material lifetime in memory.
+     */
+    fun getMlDsaPrivateKey(): ByteArray? {
+        return encryptedPrefs.getString(KEY_MLDSA_PRIVATE, null)?.hexToBytes()
+    }
+
     fun getPqcEncapsulationKey(): ByteArray? {
         return encryptedPrefs.getString(KEY_PQC_ENCAPSULATION, null)?.hexToBytes()
     }
@@ -196,6 +215,34 @@ class KeyManager @Inject constructor(
         return key
     }
 
+    /**
+     * Generate a dual-signed auth token:
+     * ``<user_id>.<timestamp_ms>.<ed25519_sig>[.<mldsa_sig>]``
+     *
+     * Centralised here so KtorApiService and WebSocketClient stay in sync.
+     */
+    fun generateAuthToken(pqcProvider: PqcProvider): String {
+        val uid = getUserId() ?: throw IllegalStateException("No identity — bootstrap first")
+        val ts = System.currentTimeMillis().toString()
+        val payload = "$uid.$ts"
+        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+        val signature = sign(payloadBytes)
+        val sigB64 = android.util.Base64.encodeToString(signature, android.util.Base64.NO_WRAP)
+        // Append ML-DSA-65 signature if PQC keys are available
+        val pqcSig = try {
+            val mlDsaPrivKey = getMlDsaPrivateKey()
+            if (mlDsaPrivKey != null) {
+                try {
+                    "." + android.util.Base64.encodeToString(
+                        pqcProvider.sign(payloadBytes, mlDsaPrivKey), android.util.Base64.NO_WRAP)
+                } finally {
+                    mlDsaPrivKey.fill(0)
+                }
+            } else ""
+        } catch (_: Exception) { "" }
+        return "$payload.$sigB64$pqcSig"
+    }
+
     fun sign(data: ByteArray): ByteArray {
         val privKeyBytes = encryptedPrefs.getString(KEY_PRIVATE_SIGNING, null)?.hexToBytes()
             ?: throw IllegalStateException("No signing key available")
@@ -254,6 +301,13 @@ class KeyManager @Inject constructor(
             .apply()
     }
 
+    fun stageMlDsaKeys(publicKey: ByteArray, privateKey: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(PENDING_MLDSA_PUBLIC, publicKey.toHex())
+            .putString(PENDING_MLDSA_PRIVATE, privateKey.toHex())
+            .apply()
+    }
+
     /**
      * Promote staged keys to active. Called after server confirms rotation,
      * or on app startup if staged keys exist (server accepted but app crashed
@@ -271,12 +325,20 @@ class KeyManager @Inject constructor(
             .putString(KEY_PUBLIC_IDENTITY, pubId)
             .putString(KEY_PRIVATE_IDENTITY, privId)
 
-        // Promote PQC keys if staged
+        // Promote PQC KEM keys if staged
         val pqcEk = encryptedPrefs.getString(PENDING_PQC_ENCAPSULATION, null)
         val pqcDk = encryptedPrefs.getString(PENDING_PQC_DECAPSULATION, null)
         if (pqcEk != null && pqcDk != null) {
             editor.putString(KEY_PQC_ENCAPSULATION, pqcEk)
             editor.putString(KEY_PQC_DECAPSULATION, pqcDk)
+        }
+
+        // Promote ML-DSA signing keys if staged
+        val mlDsaPub = encryptedPrefs.getString(PENDING_MLDSA_PUBLIC, null)
+        val mlDsaPriv = encryptedPrefs.getString(PENDING_MLDSA_PRIVATE, null)
+        if (mlDsaPub != null && mlDsaPriv != null) {
+            editor.putString(KEY_MLDSA_PUBLIC, mlDsaPub)
+            editor.putString(KEY_MLDSA_PRIVATE, mlDsaPriv)
         }
 
         // Clear staged keys and commit synchronously for crash safety.
@@ -289,6 +351,8 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PRIVATE_IDENTITY)
             .remove(PENDING_PQC_ENCAPSULATION)
             .remove(PENDING_PQC_DECAPSULATION)
+            .remove(PENDING_MLDSA_PUBLIC)
+            .remove(PENDING_MLDSA_PRIVATE)
             .commit()
     }
 
@@ -297,6 +361,10 @@ class KeyManager @Inject constructor(
     }
 
     fun clearStagedKeys() {
+        // Use commit() (synchronous) instead of apply() to ensure staged keys
+        // are removed before returning. With apply(), a crash before the async
+        // disk write completes would leave staged keys on disk, causing
+        // recoverFromInterruptedKeyRotation() to promote rejected keys.
         encryptedPrefs.edit()
             .remove(PENDING_PUBLIC_SIGNING)
             .remove(PENDING_PRIVATE_SIGNING)
@@ -304,11 +372,13 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PRIVATE_IDENTITY)
             .remove(PENDING_PQC_ENCAPSULATION)
             .remove(PENDING_PQC_DECAPSULATION)
-            .apply()
+            .remove(PENDING_MLDSA_PUBLIC)
+            .remove(PENDING_MLDSA_PRIVATE)
+            .commit()
     }
 
     fun wipeAll() {
-        encryptedPrefs.edit().clear().apply()
+        encryptedPrefs.edit().clear().commit()
         sessionCache.clear()
     }
 
@@ -323,6 +393,8 @@ class KeyManager @Inject constructor(
         private const val KEY_SHARE_CODE = "share_code"
         private const val KEY_PQC_ENCAPSULATION = "pqc_ek"
         private const val KEY_PQC_DECAPSULATION = "pqc_dk"
+        private const val KEY_MLDSA_PUBLIC = "mldsa_pub"
+        private const val KEY_MLDSA_PRIVATE = "mldsa_priv"
         private const val KEY_CREATED_AT = "created_at"
         private const val PQC_PREFIX = "pqc_session_"
         private const val SESSION_PREFIX = "session_id_"
@@ -335,6 +407,8 @@ class KeyManager @Inject constructor(
         private const val PENDING_PRIVATE_IDENTITY = "pending_priv_id"
         private const val PENDING_PQC_ENCAPSULATION = "pending_pqc_ek"
         private const val PENDING_PQC_DECAPSULATION = "pending_pqc_dk"
+        private const val PENDING_MLDSA_PUBLIC = "pending_mldsa_pub"
+        private const val PENDING_MLDSA_PRIVATE = "pending_mldsa_priv"
     }
 }
 

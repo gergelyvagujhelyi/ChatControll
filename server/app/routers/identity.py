@@ -54,6 +54,7 @@ async def bootstrap_identity(
         public_signing_key=request.public_signing_key,
         public_identity_key=request.public_identity_key,
         pqc_encapsulation_key=request.pqc_encapsulation_key,
+        pqc_signing_key=request.pqc_signing_key,
         share_code=share_code,
         fcm_token=request.fcm_token,
     )
@@ -85,6 +86,7 @@ async def fetch_key_bundle(
         public_signing_key=identity.public_signing_key,
         public_identity_key=identity.public_identity_key,
         pqc_encapsulation_key=identity.pqc_encapsulation_key,
+        pqc_signing_key=identity.pqc_signing_key,
     )
 
 
@@ -110,6 +112,7 @@ async def resolve_share_code(
         public_signing_key=identity.public_signing_key,
         public_identity_key=identity.public_identity_key,
         pqc_encapsulation_key=identity.pqc_encapsulation_key,
+        pqc_signing_key=identity.pqc_signing_key,
     )
 
 
@@ -175,6 +178,24 @@ async def rotate_keys(
         logging.getLogger(__name__).warning("Key proof validation error: %s", e)
         raise HTTPException(status_code=400, detail="New key proof-of-possession failed")
 
+    # Verify ML-DSA-65 proof-of-possession for the new PQC signing key.
+    # If a PQC key is provided, proof is REQUIRED — otherwise an attacker
+    # could inject an arbitrary key without proving possession.
+    if request.pqc_signing_key:
+        if not request.pqc_key_proof:
+            raise HTTPException(status_code=400, detail="pqc_key_proof required when rotating PQC signing key")
+        from app.auth import _extract_mldsa_raw_pk, _verify_mldsa_signature
+        try:
+            pqc_pub_bytes = base64.b64decode(request.pqc_signing_key, validate=True)
+            pqc_proof_sig = base64.b64decode(request.pqc_key_proof, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 in PQC key rotation")
+        raw_pk = _extract_mldsa_raw_pk(pqc_pub_bytes)
+        if raw_pk is None:
+            raise HTTPException(status_code=400, detail="Invalid ML-DSA-65 public key format")
+        if not _verify_mldsa_signature(raw_pk, request.pqc_signing_key.encode("utf-8"), pqc_proof_sig):
+            raise HTTPException(status_code=400, detail="PQC key proof-of-possession failed")
+
     result = await db.execute(
         select(Identity).where(Identity.user_id == x_user_id)
     )
@@ -182,10 +203,19 @@ async def rotate_keys(
     if identity is None:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Prevent clearing an existing PQC signing key without a valid new one.
+    # An attacker who compromises Ed25519 could otherwise downgrade the user
+    # from hybrid PQC+Ed25519 auth back to Ed25519-only by sending an empty
+    # pqc_signing_key — exactly the scenario hybrid PQC auth is designed to prevent.
+    if identity.pqc_signing_key and not request.pqc_signing_key:
+        raise HTTPException(status_code=400, detail="Cannot clear PQC signing key once set")
+
     identity.public_signing_key = request.public_signing_key
     identity.public_identity_key = request.public_identity_key
     if request.pqc_encapsulation_key is not None:
         identity.pqc_encapsulation_key = request.pqc_encapsulation_key
+    if request.pqc_signing_key:
+        identity.pqc_signing_key = request.pqc_signing_key
 
     # Recompute share code from new identity key.
     # Collision is caught by IntegrityError on commit (if a unique constraint

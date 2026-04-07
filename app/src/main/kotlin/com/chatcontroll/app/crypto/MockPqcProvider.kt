@@ -51,6 +51,22 @@ class MockPqcProvider @Inject constructor() : PqcProvider {
         return mac.doFinal()
     }
 
+    override fun generateSigningKeyPair(): DsaKeyPair {
+        val key = ByteArray(MOCK_KEY_SIZE).also { secureRandom.nextBytes(it) }
+        return DsaKeyPair(publicKey = key, privateKey = key.copyOf())
+    }
+
+    override fun sign(data: ByteArray, privateKey: ByteArray): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(privateKey, "HmacSHA256"))
+        return mac.doFinal(data)
+    }
+
+    override fun verify(data: ByteArray, signature: ByteArray, publicKey: ByteArray): Boolean {
+        val expected = sign(data, publicKey)
+        return java.security.MessageDigest.isEqual(signature, expected)
+    }
+
     companion object {
         private const val MOCK_KEY_SIZE = 32
         private const val MOCK_NONCE_SIZE = 32

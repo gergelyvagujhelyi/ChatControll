@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import android.net.Uri
 import com.chatcontroll.app.call.CallManager
 import com.chatcontroll.app.domain.model.CallState
-import com.chatcontroll.app.domain.repository.IdentityRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -18,7 +17,6 @@ import javax.inject.Inject
 class CallViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val callManager: CallManager,
-    private val identityRepository: IdentityRepository,
 ) : ViewModel() {
 
     val callState: StateFlow<CallState?> = callManager.callState
@@ -28,17 +26,17 @@ class CallViewModel @Inject constructor(
     private val pendingDisplayName: String = savedStateHandle.get<String>("displayName")
         ?.let { Uri.decode(it) } ?: pendingContactId.take(8)
 
+    /** Encryption label derived from the call's actual PQC key agreement result. */
     val encryptionInfo: StateFlow<String> =
-        identityRepository.observePqcSession(pendingContactId)
-            .map { isPqc ->
-                if (isPqc) "ML-KEM-768 + X25519 + AES-256-GCM"
+        callManager.callState
+            .map { state ->
+                if (state?.pqcEstablished == true) "ML-KEM-768 + X25519 + AES-256-GCM"
                 else "X25519 + AES-256-GCM"
             }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5000),
-                if (identityRepository.isPqcSession(pendingContactId)) "ML-KEM-768 + X25519 + AES-256-GCM"
-                else "X25519 + AES-256-GCM",
+                "X25519 + AES-256-GCM",
             )
 
     /** Whether the outgoing call has been initiated (guards against double-start). */
