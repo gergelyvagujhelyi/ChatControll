@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.chatcontroll.app.crypto.KeyManager
 import com.chatcontroll.app.crypto.SessionResetSender
 import com.chatcontroll.app.crypto.SessionResetSender.Companion.CTRL_ACCOUNT_DELETED
+import com.chatcontroll.app.data.local.AppDatabase
 import com.chatcontroll.app.data.local.dao.ContactDao
 import com.chatcontroll.app.data.local.dao.ConversationDao
 import com.chatcontroll.app.data.local.dao.MessageDao
@@ -30,6 +31,7 @@ private val Context.settingsDataStore by preferencesDataStore(name = "privacy_se
 @Singleton
 class SettingsRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val database: AppDatabase,
     private val messageDao: MessageDao,
     private val conversationDao: ConversationDao,
     private val contactDao: ContactDao,
@@ -104,9 +106,14 @@ class SettingsRepositoryImpl @Inject constructor(
 
     private suspend fun wipeLocal() {
         webSocketClient.disconnect()
-        // Wipe crypto keys first (makes DB inaccessible), then delete the
-        // DB file. Do NOT use DAOs after wipeAll() — the Room singleton's
-        // SQLCipher connection is invalidated when the file is removed.
+        // Clear data via DAOs while the DB connection is still valid,
+        // then close the database to release the SQLCipher connection
+        // before deleting the file. Without close(), active Room Flow
+        // collectors would crash querying the deleted file.
+        messageDao.deleteAll()
+        conversationDao.deleteAll()
+        contactDao.deleteAll()
+        database.close()
         keyManager.wipeAll()
         context.deleteDatabase("chatcontroll.db")
         context.settingsDataStore.edit { it.clear() }
