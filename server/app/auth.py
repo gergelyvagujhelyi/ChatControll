@@ -33,8 +33,8 @@ TOKEN_MAX_AGE_MS = 5 * 60 * 1000
 # ML-DSA-65 SPKI header is 22 bytes; raw public key is 1952 bytes.
 _MLDSA65_SPKI_HEADER_LEN = 22
 _MLDSA65_RAW_PK_LEN = 1952
-# DER-encoded OID for ML-DSA-65: 2.16.840.1.101.3.4.3.17
-_MLDSA65_OID = bytes.fromhex("0609608648016503040311")
+# DER-encoded OID for ML-DSA-65: 2.16.840.1.101.3.4.3.18
+_MLDSA65_OID = bytes.fromhex("0609608648016503040312")
 
 
 def _extract_mldsa_raw_pk(key_bytes: bytes) -> Optional[bytes]:
