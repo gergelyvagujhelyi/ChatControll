@@ -948,7 +948,7 @@ class CallManager @Inject constructor(
 
             val isPqcEstablished = pqcSecret.isNotEmpty()
 
-            // Combine classical + PQC secrets via SHAKE-256 KDF, then zeroize inputs
+            // Combine classical + PQC secrets via KMACXOF256 KDF, then zeroize inputs
             val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
             classicalSecret.fill(0)
             pqcSecret.fill(0)
@@ -1137,27 +1137,24 @@ class CallManager @Inject constructor(
 }
 
 /**
- * SHAKE-256 based key derivation for call encryption.
+ * KMACXOF256-based key derivation for call encryption (NIST SP 800-185).
  *
  * Uses the Keccak sponge construction (SHA-3 family) instead of HMAC-SHA-256
  * so the entire post-quantum call path avoids SHA-2 dependencies.
- * Each input is length-prefixed (4-byte big-endian length) to prevent
- * concatenation collisions between different (salt, ikm, info) tuples.
+ * KMACXOF256 provides built-in domain separation and input encoding,
+ * eliminating the need for manual length-prefixing.
+ *
+ * Mapping: KMACXOF256(K=ikm, X=salt, S=info, L=length*8)
+ *
+ * Note: BC's [KMAC.doFinal(out, off, len)] uses the XOF variant (right_encode(0)),
+ * which supports arbitrary output lengths.
  */
 private fun shake256Kdf(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
-    val digest = org.bouncycastle.crypto.digests.SHAKEDigest(256)
-    for (part in arrayOf(salt, ikm, info)) {
-        val lenBytes = byteArrayOf(
-            (part.size shr 24).toByte(),
-            (part.size shr 16).toByte(),
-            (part.size shr 8).toByte(),
-            part.size.toByte(),
-        )
-        digest.update(lenBytes, 0, 4)
-        digest.update(part, 0, part.size)
-    }
+    val kmac = org.bouncycastle.crypto.macs.KMAC(256, info)
+    kmac.init(org.bouncycastle.crypto.params.KeyParameter(ikm))
+    kmac.update(salt, 0, salt.size)
     val output = ByteArray(length)
-    digest.doFinal(output, 0, length)
+    kmac.doFinal(output, 0, length)
     return output
 }
 
