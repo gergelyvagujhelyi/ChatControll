@@ -378,7 +378,7 @@ class KeyManager @Inject constructor(
     }
 
     fun wipeAll() {
-        encryptedPrefs.edit().clear().apply()
+        encryptedPrefs.edit().clear().commit()
         sessionCache.clear()
     }
 

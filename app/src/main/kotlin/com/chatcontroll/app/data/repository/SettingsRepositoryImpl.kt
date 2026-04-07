@@ -100,10 +100,6 @@ class SettingsRepositoryImpl @Inject constructor(
 
     private suspend fun wipeLocal() {
         webSocketClient.disconnect()
-        // Clear data via DAOs while the DB connection is still valid,
-        // then close the database to release the SQLCipher connection
-        // before deleting the file. Without close(), active Room Flow
-        // collectors would crash querying the deleted file.
         messageDao.deleteAll()
         conversationDao.deleteAll()
         contactDao.deleteAll()
@@ -112,9 +108,7 @@ class SettingsRepositoryImpl @Inject constructor(
         context.deleteDatabase("chatcontroll.db")
         context.settingsDataStore.edit { it.clear() }
         // Kill the process so the Hilt singleton graph (including the now-closed
-        // AppDatabase) is fully recreated on next launch. Without this, any
-        // component accessing a DAO after wipe crashes with IllegalStateException
-        // because the @Singleton AppDatabase reference is dead.
+        // AppDatabase) is fully recreated on next launch.
         kotlin.system.exitProcess(0)
     }
 
