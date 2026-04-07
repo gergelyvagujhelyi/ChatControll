@@ -188,6 +188,12 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 17. **QA bug fixes (v0.3.9 / server v0.3.4)** — Fixed race conditions in WebSocket client connection management and call signal processing. Eliminated resource leak from `HttpClient` recreation on each WebSocket reconnect (reverted to singleton). Fixed rate limiter bypass where disconnecting reset per-user quota — rate limit state is now preserved across reconnects and pruned periodically. Improved rate limiter pruning performance under load with high-water mark and time-gated scans. Fixed replay cache eviction, `ContactEntity` equality, share code mismatch, and concurrent `_pendingNewContact` access during calls.
 
+18. **ML-DSA-65 dual-signing (v0.4.0)** — All auth tokens, messages, and call signals are now dual-signed with Ed25519 + ML-DSA-65 when PQC keys are available. The server enforces mandatory ML-DSA verification for users with PQC signing keys, preventing downgrade attacks. Key rotation requires proof-of-possession for both Ed25519 and ML-DSA-65.
+
+19. **Hybrid PQC call encryption (v0.4.0)** — Call session keys are derived via a hybrid X25519 + ML-KEM-768 key agreement using SHAKE-256 KDF (SHA-3 family), independent from the messaging Double Ratchet. Call signal payloads are encrypted with AES-256-GCM using per-call ephemeral keys. The `call_ringing` signal provides accurate "Ringing..." status based on peer confirmation.
+
+20. **Security hardening (v0.4.0)** — Fixed 21 security and correctness bugs including: endCallGuard race condition leaking WebRTC resources, late call_answer reviving terminal calls, PQC signing key not persisted on contact upgrade (signature verification gap), SPKI header OID validation, process kill after database wipe, duplicated auth token logic, and unconditional secret zeroization.
+
 ## Next Priorities
 
 1. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.

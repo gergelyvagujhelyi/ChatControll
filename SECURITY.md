@@ -20,7 +20,8 @@ recv_key = shared_secret[32:64]
 - **Payload encryption**: AES-256-GCM with random 12-byte nonces.
 
 ### Identity
-- **Signing**: Ed25519 (used for identity assertions and future message authentication).
+- **Classical signing**: Ed25519 (identity assertions, message authentication, auth tokens).
+- **Post-quantum signing**: ML-DSA-65 (NIST FIPS 204) via Bouncy Castle 1.79+. Used for hybrid dual-signing of auth tokens, messages, and call signals alongside Ed25519.
 - **Key agreement**: X25519 (used for session establishment).
 - **Storage**: EncryptedSharedPreferences backed by Android Keystore AES-256-GCM master key.
 
@@ -121,7 +122,7 @@ The FCM push token is tied to the device's Google account. A sophisticated adver
 Messages are signed with Ed25519 before sending. The recipient verifies the signature against the sender's stored public signing key before decryption. Since v0.3.10, unsigned messages are unconditionally rejected — the legacy backward-compatibility exemption for contacts with `signatureRequired=false` has been removed to prevent impersonation via unsigned message injection.
 
 ### Call Signal Authentication (v0.3.1+)
-Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519. The recipient verifies the signature against the sender's public signing key before processing. This prevents call signal injection by a compromised relay server. Since v0.3.8, if the sender is not yet a local contact (e.g. newly added contact with no prior messages), the key bundle is fetched from the server and the contact is persisted only after signature verification succeeds.
+Call signaling messages (offer, answer, ICE candidates) are signed with Ed25519. The recipient verifies the signature against the sender's public signing key before processing. This prevents call signal injection by a compromised relay server. Since v0.3.8, if the sender is not yet a local contact (e.g. newly added contact with no prior messages), the key bundle is fetched from the server and the contact is persisted only after signature verification succeeds. Since v0.4.0, call signals are also dual-signed with ML-DSA-65 when the sender has PQC signing keys, with the same mandatory enforcement as messages (PQC-capable senders cannot omit ML-DSA signatures).
 
 ### Signature Verification Robustness (v0.3.1+)
 When a signed message or call signal arrives from an unknown sender, the client fetches the sender's key bundle from the server before verification. If the sender cannot be resolved, the signal is silently dropped. For call signals, the fetched contact is kept in memory during verification and only persisted to the database after the signature is confirmed valid (v0.3.8).
@@ -134,12 +135,38 @@ When a signed message or call signal arrives from an unknown sender, the client 
 ### Base64 Input Validation (v0.3.4+)
 All `Base64.decode` calls on externally-received data (key bundles, KEM ciphertext, message envelopes) are wrapped in try/catch. Malformed Base64 from the server or a peer is logged and rejected rather than crashing the app.
 
-### Call Media Encryption (v0.3.9+)
-Voice call media is end-to-end encrypted at the frame level using WebRTC's FrameCryptor API:
-- **Algorithm**: AES-GCM with HKDF-derived keys per sender/receiver.
-- **Key material**: Derived from the existing session keys established during the Double Ratchet handshake, so the TURN server and any network intermediary sees only encrypted audio frames.
+### Call Encryption (v0.3.9+, hybrid PQC v0.4.0)
+Voice call media and signaling are end-to-end encrypted:
+
+**Signal encryption** (v0.4.0): Call signal payloads (SDP offers/answers, ICE candidates) are encrypted with AES-256-GCM using per-call ephemeral keys derived from session keys via SHAKE-256 KDF. This bypasses the Double Ratchet to avoid advancing the message chain — call signals are ephemeral and may be lost/reordered.
+
+**Hybrid PQC key agreement** (v0.4.0): Call session keys are derived independently from the messaging ratchet to avoid corrupting ratchet state:
+```
+call_shared_secret = SHAKE-256-KDF(
+    IKM = X25519(local_priv, remote_pub) || ML-KEM-768.Encapsulate(remote_ek),
+    salt = "ChatControll-v1-call-init",
+    info = "hybrid-key-establishment",
+    length = 32
+)
+chain_material = SHAKE-256-KDF(call_shared_secret, "ChatControll-v1-call-chains", "bidirectional-chains", 64)
+send_key = chain_material[0:32]  (initiator) / chain_material[32:64]  (responder)
+```
+The entire call encryption path uses SHAKE-256 (SHA-3 family) instead of HMAC-SHA-256 to avoid SHA-2 dependencies in the post-quantum path. KEM ciphertext is attached to the `call_offer` signal and decapsulated by the responder.
+
+**Media encryption**: Frame-level AES-GCM via WebRTC FrameCryptor API. Media keys are derived from session keys using SHAKE-256 KDF with the call ID as salt. The commutative XOR of send/receive keys ensures both peers derive the same media key.
 - **Implementation**: `WebRtcEngine.enableFrameEncryption(key)` creates separate sender and receiver `FrameCryptor` instances. Encryption state changes are surfaced via callback for UI feedback.
 - **Cleanup**: Frame cryptors are disposed alongside the peer connection to prevent key material leaks.
+
+### ML-DSA-65 Dual-Signing (v0.4.0)
+All auth tokens, messages, and call signals are now dual-signed with Ed25519 + ML-DSA-65 when PQC keys are available:
+- **Auth tokens**: Format extended to `<user_id>.<timestamp_ms>.<ed25519_sig>.<mldsa_sig>`. The server verifies both signatures when the user has a PQC signing key registered.
+- **Messages**: `pqcSignature` field added to `SendMessageRequest`. Recipients enforce mandatory ML-DSA verification for PQC-capable senders.
+- **Call signals**: `pqcSignature` field added to `CallSignalRequest`. Same enforcement as messages.
+- **Anti-downgrade**: If a user has a PQC signing key, it cannot be cleared via key rotation. An attacker who compromises Ed25519 cannot downgrade the user from hybrid PQC+Ed25519 auth back to Ed25519-only.
+- **Key rotation**: Proof-of-possession is required for both Ed25519 (new key signs itself) and ML-DSA-65 (new PQC key signs its own Base64 encoding).
+
+### Call Ringing Confirmation (v0.4.0)
+A `call_ringing` signal is sent by the callee when it receives a `call_offer`, confirming the device is actively ringing. The caller transitions from "Connecting..." to "Ringing..." only after receiving this confirmation, providing accurate call status to the user.
 
 ### Call Signal Reliability (v0.3.4–0.3.8)
 Call signaling has been progressively hardened:
@@ -161,6 +188,20 @@ Call signaling has been progressively hardened:
 - **Nginx security headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, and Referrer-Policy added.
 - **Rate limiter multi-worker compensation**: Per-worker IP rate limit is divided by `UVICORN_WORKERS` count.
 - **WebSocket DB session scoping**: DB session is explicitly closed after auth to avoid pool exhaustion on long-lived connections.
+
+### Security Hardening (v0.4.0)
+- **endCallGuard race fix**: The guard preventing double-dispose of WebRTC resources is now reset at the start of each new call, preventing leaked native resources and stuck audio mode when calls start within the 2s cleanup window.
+- **Late call_answer rejection**: The `call_answer` handler now checks for terminal call status, preventing a queued answer from reviving a call the user already hung up.
+- **SPKI OID validation**: Server-side ML-DSA-65 SPKI header parsing now validates the OID bytes, not just length, preventing garbage SPKI headers from being accepted.
+- **PQC signing key persistence**: Contact PQC signing keys are now stored during session upgrade in `tryEstablishSession`, closing a gap where PQC signatures were never verified for contacts upgraded via inbound messages.
+- **Control message retry on PQC sig missing**: Control messages (session_reset, account_deleted) with missing PQC signatures are no longer permanently ACK'd — they are skipped for retry on next sync, handling the key propagation race.
+- **Process kill after wipe**: `wipeLocal()` now calls `exitProcess(0)` after database close to prevent the dead `@Singleton AppDatabase` from crashing subsequent DAO access.
+- **ML-DSA private key cleanup**: `BouncyCastlePqcProvider.sign()` now calls `tryDestroy()` on the reconstructed private key JCA object.
+- **Auth token deduplication**: Dual-signed token generation extracted from `KtorApiService`/`WebSocketClient` into `KeyManager.generateAuthToken()` to prevent implementations drifting apart.
+- **Unconditional secret zeroization**: `pqcSecret` is now always zeroized (was conditional on `isPqcEstablished`).
+- **ML-DSA failure logging**: Silent ML-DSA signing failures in `SessionResetSender`, `MessageRepositoryImpl`, and `IdentityRepositoryImpl` now log warnings.
+- **Schema 6.json restored**: Retroactive modification of the v6 schema (which broke migration testing) was reverted.
+- **404 handling in deleteIdentity**: Fragile string matching replaced with direct HTTP status code check.
 
 ### Certificate Pinning
 Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry.
@@ -205,6 +246,11 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] Nginx security headers — HSTS, CSP, X-Frame-Options, nosniff, Referrer-Policy
 - [x] Server TOCTOU protection — row-level locking on message queue depth check
 - [x] Ratchet header validation — bounds checking on untrusted messageNumber/previousChainLength
+- [x] ML-DSA-65 dual-signing — auth tokens, messages, and call signals signed with Ed25519 + ML-DSA-65
+- [x] Hybrid PQC call encryption — ML-KEM-768 key agreement + SHAKE-256 KDF for call session keys
+- [x] PQC signing key anti-downgrade — server prevents clearing PQC signing key once set
+- [x] PQC proof-of-possession — ML-DSA key rotation requires signing proof
+- [x] Call ringing confirmation — caller shows accurate Ringing status based on peer signal
 - [ ] Push proxy to break FCM linkability
 - [x] Key rotation protocol — `rotateIdentityKeys()` with crash-safe staged promotion
 - [ ] Automated key rotation schedule + old-key grace period

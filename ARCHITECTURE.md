@@ -159,3 +159,25 @@
 **Why**: During a screen transition, both the outgoing and incoming composable are in the composition tree. The outgoing composable's lifecycle drops from `RESUMED` to `STARTED`, but its UI is still visible and tappable during the exit animation. If the outgoing screen's call button occupies the same position as the incoming screen's settings button, a tap triggers the call. Checking lifecycle state is the standard Compose Navigation pattern for preventing stale interactions.
 
 **Tradeoff**: None significant. The check is a single property read and is the idiomatic solution.
+
+---
+
+## ADR-15: ML-DSA-65 dual-signing for hybrid post-quantum authentication
+
+**Decision**: Sign all auth tokens, messages, and call signals with both Ed25519 and ML-DSA-65 when PQC keys are available. Enforce mandatory ML-DSA verification for users who have a PQC signing key registered.
+
+**Why**: Ed25519 alone is vulnerable to quantum attacks. Adding ML-DSA-65 (NIST FIPS 204) creates a hybrid authentication model where an attacker must break both classical and post-quantum signature schemes. The mandatory enforcement (PQC-capable senders cannot omit ML-DSA signatures) prevents downgrade attacks where an attacker who compromises Ed25519 silently strips the PQC layer. The server prevents clearing a PQC signing key once set, ensuring the anti-downgrade protection is permanent.
+
+**Implementation**: Auth token generation is centralised in `KeyManager.generateAuthToken()` (used by both `KtorApiService` and `WebSocketClient`) to prevent drift. The token format is `<user_id>.<ts>.<ed25519_sig>[.<mldsa_sig>]`. Key rotation requires proof-of-possession for both Ed25519 and ML-DSA-65.
+
+**Tradeoff**: ML-DSA-65 signatures are ~3.3 KB each, increasing message and signal sizes. Signing is ~1-2ms on modern hardware. Acceptable for a security-critical messaging app where messages are infrequent relative to computation cost.
+
+---
+
+## ADR-16: SHAKE-256 KDF for call encryption (independent of messaging ratchet)
+
+**Decision**: Derive call session keys using SHAKE-256 (SHA-3 family) KDF instead of HKDF-SHA256, independently from the messaging Double Ratchet.
+
+**Why**: Call keys must be derived without advancing the message ratchet (which would desynchronise the messaging chain). Using a separate KDF with a distinct domain separator (`ChatControll-v1-call-init`) ensures call keys are cryptographically isolated. SHAKE-256 was chosen over HMAC-SHA-256 so the entire post-quantum call path avoids SHA-2 dependencies. Each input is length-prefixed (4-byte big-endian) to prevent concatenation collisions.
+
+**Tradeoff**: Introduces a second KDF alongside HKDF-SHA256 (used by the messaging layer). The separation is intentional — the messaging layer's HKDF-SHA256 is part of the Signal Double Ratchet specification, while the call layer is free to use a SHA-3-family construction.
