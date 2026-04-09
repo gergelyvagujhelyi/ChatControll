@@ -155,7 +155,7 @@ class ChatNotificationManager @Inject constructor(
             }
         }
 
-        val notificationId = ("missed-call-$callerId").hashCode() and Int.MAX_VALUE
+        val notificationId = (MISSED_CALL_PREFIX + callerId).hashCode() and Int.MAX_VALUE
 
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -183,7 +183,7 @@ class ChatNotificationManager @Inject constructor(
         val compat = NotificationManagerCompat.from(context)
         compat.cancel(conversationId.hashCode() and Int.MAX_VALUE)
         if (contactId != null) {
-            compat.cancel(("missed-call-$contactId").hashCode() and Int.MAX_VALUE)
+            compat.cancel((MISSED_CALL_PREFIX + contactId).hashCode() and Int.MAX_VALUE)
         }
     }
 
@@ -206,5 +206,6 @@ class ChatNotificationManager @Inject constructor(
         const val CHANNEL_SERVICE = "background_service"
         const val EXTRA_CONVERSATION_ID = "conversation_id"
         const val EXTRA_CONTACT_ID = "contact_id"
+        private const val MISSED_CALL_PREFIX = "missed-call-"
     }
 }
