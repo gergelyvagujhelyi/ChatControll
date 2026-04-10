@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Production: certificate pinning for the relay server.
-         Uncomment and replace pin hashes before production deployment.
-         Generate with:
-           openssl s_client -connect api.chatcontroll.vagujhelyigergely.com:443 \
-             | openssl x509 -pubkey -noout \
-             | openssl pkey -pubin -outform der \
-             | openssl dgst -sha256 -binary | openssl enc -base64
-    -->
+    <!-- Production: certificate pinning for the relay server. -->
     <domain-config>
         <domain includeSubdomains="true">api.chatcontroll.vagujhelyigergely.com</domain>
         <pin-set expiration="2028-10-01">
@@ -16,6 +9,12 @@
             <!-- Intermediate CA (backup) -->
             <pin digest="SHA-256">iFvwVyJSxnQdyaUvUERIf+8qk7gRze3612JMwoO3zdU=</pin>
         </pin-set>
+    </domain-config>
+
+    <!-- Debug only: allow cleartext for local development -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">chatcontroll.local</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
     </domain-config>
 
     <base-config cleartextTrafficPermitted="false">

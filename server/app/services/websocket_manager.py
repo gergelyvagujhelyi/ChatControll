@@ -24,6 +24,7 @@ MAX_WS_CONNECTIONS_PER_USER = 5
 
 
 _PENDING_SIGNAL_TTL = 30  # seconds — signals older than this are discarded
+_MAX_PENDING_SIGNAL_USERS = 10_000  # global cap on distinct recipient entries
 
 
 class WebSocketManager:
@@ -136,6 +137,19 @@ class WebSocketManager:
         """Buffer a call signal for a user who is currently offline."""
         now = time.monotonic()
         async with self._lock:
+            # Global cap: refuse new recipient entries beyond the limit
+            if recipient_id not in self._pending_call_signals:
+                if len(self._pending_call_signals) >= _MAX_PENDING_SIGNAL_USERS:
+                    # Purge globally expired entries before refusing
+                    stale = [
+                        uid for uid, sigs in self._pending_call_signals.items()
+                        if not sigs or (now - sigs[-1][0]) > _PENDING_SIGNAL_TTL
+                    ]
+                    for uid in stale:
+                        del self._pending_call_signals[uid]
+                    if len(self._pending_call_signals) >= _MAX_PENDING_SIGNAL_USERS:
+                        return  # Still full after pruning — drop the signal
+
             pending = self._pending_call_signals.setdefault(recipient_id, [])
             # Evict expired entries
             pending[:] = [(ts, p) for ts, p in pending if now - ts <= _PENDING_SIGNAL_TTL]

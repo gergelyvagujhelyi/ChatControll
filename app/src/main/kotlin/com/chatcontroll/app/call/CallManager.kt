@@ -760,7 +760,8 @@ class CallManager @Inject constructor(
             val callId = _callState.value?.callId
                 ?: throw IllegalStateException("No active call")
             val mediaKey = deriveMediaKey(sessionKeys, callId)
-            webRtcEngine?.enableFrameEncryption(mediaKey)
+            val callSalt = callId.toByteArray(Charsets.UTF_8)
+            webRtcEngine?.enableFrameEncryption(mediaKey, callSalt)
             mediaKey.fill(0)
             logDebug("Frame encryption enabled for call $callId")
         } catch (e: Exception) {

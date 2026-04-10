@@ -161,7 +161,7 @@ send_key = chain_material[0:32]  (initiator) / chain_material[32:64]  (responder
 The entire call encryption path uses SHAKE-256 (SHA-3 family) instead of HMAC-SHA-256 to avoid SHA-2 dependencies in the post-quantum path. KEM ciphertext is attached to the `call_offer` signal and decapsulated by the responder.
 
 **Media encryption**: Frame-level AES-GCM via WebRTC FrameCryptor API. Media keys are derived from session keys using SHAKE-256 KDF with the call ID as salt. The commutative XOR of send/receive keys ensures both peers derive the same media key.
-- **Implementation**: `WebRtcEngine.enableFrameEncryption(key)` creates separate sender and receiver `FrameCryptor` instances. Encryption state changes are surfaced via callback for UI feedback.
+- **Implementation**: `WebRtcEngine.enableFrameEncryption(key, salt)` creates separate sender and receiver `FrameCryptor` instances with a per-call HKDF salt (call ID) for session binding. Encryption state changes are surfaced via callback for UI feedback.
 - **Cleanup**: Frame cryptors are disposed alongside the peer connection to prevent key material leaks.
 
 ### ML-DSA-65 Dual-Signing (v0.4.0)
@@ -210,8 +210,14 @@ Call signaling has been progressively hardened:
 - **Schema 6.json restored**: Retroactive modification of the v6 schema (which broke migration testing) was reverted.
 - **404 handling in deleteIdentity**: Fragile string matching replaced with direct HTTP status code check.
 
+### WebRTC IP Privacy (v0.4.2)
+When TURN relay servers are available, WebRTC ICE transport is forced to `RELAY` mode, preventing STUN from leaking the user's real IP address to the remote peer. Falls back to `ALL` (allowing direct connections) only when no TURN server is configured (development environments).
+
+### WebSocket Frame Size Limits (v0.4.2)
+WebSocket frames are capped at 8 KB pre-authentication and 80 KB post-authentication to prevent memory exhaustion from oversized frames. The post-auth limit accommodates the largest valid call signal (65 KB encrypted payload + signatures + metadata). The server-side pending call signal buffer is also globally capped at 10K recipient entries with stale-entry pruning.
+
 ### Certificate Pinning
-Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry.
+Network security config includes SHA-256 SPKI pin hashes for the relay server's leaf certificate and intermediate CA. Pins expire 2028-10-01 and must be rotated before expiry. Since v0.4.2, cleartext traffic exemptions for local development domains are restricted to debug builds only.
 
 ## Security Checklist
 
@@ -247,7 +253,7 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] Session reset on key rotation — peers notified and blocked until re-keyed
 - [x] Account deletion protocol — contacts notified, server identity deleted, send permanently blocked
 - [x] Key change audit trail — rotation and deletion events visible in chat history
-- [x] Call frame encryption — AES-GCM via WebRTC FrameCryptor, HKDF-derived keys
+- [x] Call frame encryption — AES-GCM via WebRTC FrameCryptor, HKDF-derived keys with per-call salt
 - [x] Key material zeroization — signing keys, shared secrets, chain material wiped after use
 - [x] Mandatory message signatures — unsigned messages rejected unconditionally
 - [x] Nginx security headers — HSTS, CSP, X-Frame-Options, nosniff, Referrer-Policy
@@ -258,6 +264,8 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] PQC signing key anti-downgrade — server prevents clearing PQC signing key once set
 - [x] PQC proof-of-possession — ML-DSA key rotation requires signing proof
 - [x] Call ringing confirmation — caller shows accurate Ringing status based on peer signal
+- [x] WebRTC relay-only mode — TURN enforced when available, prevents IP leakage via STUN
+- [x] WebSocket frame size limits — pre-auth and post-auth caps prevent memory exhaustion
 - [ ] Push proxy to break FCM linkability
 - [x] Key rotation protocol — `rotateIdentityKeys()` with crash-safe staged promotion
 - [ ] Automated key rotation schedule + old-key grace period

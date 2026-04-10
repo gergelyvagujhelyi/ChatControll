@@ -232,6 +232,18 @@ async def rotate_keys(
     if identity.pqc_signing_key and not request.pqc_signing_key:
         raise HTTPException(status_code=400, detail="Cannot clear PQC signing key once set")
 
+    # Validate key fields as well-formed Base64 (matching bootstrap validation)
+    for field_name, value in [
+        ("public_identity_key", request.public_identity_key),
+        ("pqc_encapsulation_key", request.pqc_encapsulation_key),
+    ]:
+        if not value:
+            continue
+        try:
+            base64.b64decode(value, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 in {field_name}")
+
     identity.public_signing_key = request.public_signing_key
     identity.public_identity_key = request.public_identity_key
     if request.pqc_encapsulation_key is not None:
