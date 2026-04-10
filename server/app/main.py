@@ -16,7 +16,6 @@ The server NEVER:
 """
 
 import logging
-import socket
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -53,16 +52,6 @@ else:
     _handler = logging.StreamHandler()
     _handler.setFormatter(_JsonFormatter())
     logging.basicConfig(level=logging.INFO, handlers=[_handler])
-
-
-def _get_local_ip() -> str:
-    """Get the machine's LAN IP address."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
 
 
 async def _run_alembic_upgrade() -> None:

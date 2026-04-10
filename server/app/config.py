@@ -22,8 +22,7 @@ MAX_REQUEST_BODY_BYTES: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(2 * 10
 CORS_ORIGINS: list = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 WS_IDLE_TIMEOUT_SECONDS: int = int(os.getenv("WS_IDLE_TIMEOUT_SECONDS", "300"))  # 5 min
 METRICS_TOKEN: str = os.getenv("METRICS_TOKEN", "")
-# For Android emulators, use 10.0.2.2 (host alias inside emulator).
-# For real devices, set to your server's public IP.
+# Auto-detected from GCP metadata if unset. Override for non-GCP deployments.
 TURN_RELAY_IP: str = os.getenv("TURN_RELAY_IP", "")
 TURN_SECRET: str = os.getenv("TURN_SECRET", "")
 TURN_CREDENTIAL_TTL: int = int(os.getenv("TURN_CREDENTIAL_TTL", "3600"))

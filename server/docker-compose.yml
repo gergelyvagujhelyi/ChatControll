@@ -22,7 +22,8 @@ services:
       - ./turnserver.conf:/etc/turnserver.conf:ro
     command: >
       sh -c 'EXTERNAL_IP=$$(wget -qO- --header="Metadata-Flavor: Google"
-      http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)
+      http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip
+      2>/dev/null || echo "${TURN_RELAY_IP}")
       && exec turnserver -c /etc/turnserver.conf
       --static-auth-secret=${TURN_SECRET:?Set TURN_SECRET in .env}
       --external-ip=$$EXTERNAL_IP'
