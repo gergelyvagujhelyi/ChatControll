@@ -182,14 +182,17 @@ async def verify_auth_token(
         logger.debug("Auth token rejected for %s: %s", claimed_user_id[:8], e)
         raise HTTPException(status_code=401, detail="Authentication failed")
 
-    # Update last_seen_at — fire-and-forget, don't fail the request on error
+    # Update last_seen_at in a separate short-lived session so it commits
+    # regardless of whether the calling endpoint commits its own transaction.
     try:
-        await db.execute(
-            update(Identity)
-            .where(Identity.user_id == verified_user_id)
-            .values(last_seen_at=datetime.now(timezone.utc).replace(tzinfo=None))
-        )
-        await db.flush()
+        from app.database import async_session as _session_factory
+        async with _session_factory() as _sess:
+            await _sess.execute(
+                update(Identity)
+                .where(Identity.user_id == verified_user_id)
+                .values(last_seen_at=datetime.now(timezone.utc).replace(tzinfo=None))
+            )
+            await _sess.commit()
     except Exception:
         pass
 
