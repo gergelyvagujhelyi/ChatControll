@@ -10,6 +10,7 @@ Privacy-first encrypted message relay built with Python and FastAPI.
 - Provides WebSocket connections for real-time delivery
 - Buffers undelivered call signals for offline recipients (30s TTL)
 - Deletes envelopes after recipient acknowledgement
+- Purges undelivered messages older than a configurable TTL (default 30 days)
 - Rate-limits senders to prevent abuse
 
 ## What the server does NOT do
