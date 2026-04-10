@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_ENABLED, TURN_RELAY_IP, TURN_SECRET
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_RELAY_IP, TURN_SECRET
 from sqlalchemy import text
 
 from app.database import async_session, engine
@@ -120,26 +120,14 @@ async def lifespan(app: FastAPI):
     """Start services and run database migrations."""
     await _run_alembic_upgrade()
 
-    turn_transport = None
-    if TURN_ENABLED:
-        if not TURN_SECRET:
-            logging.getLogger(__name__).error(
-                "TURN_ENABLED=true but TURN_SECRET is not set. "
-                "Set TURN_SECRET or disable TURN with TURN_ENABLED=false."
-            )
-        else:
-            from app.services.turn_server import start_turn_server
-            try:
-                turn_transport = await start_turn_server(relay_ip=TURN_RELAY_IP)
-                app.state.turn_relay_ip = TURN_RELAY_IP
-            except Exception as e:
-                logging.getLogger(__name__).warning("TURN server failed to start: %s", e)
+    # TURN is handled by the coturn Docker container; the app server
+    # only needs the relay IP to build ICE server responses.
+    if TURN_RELAY_IP and TURN_SECRET:
+        app.state.turn_relay_ip = TURN_RELAY_IP
 
     yield
 
     await ws_manager.shutdown()
-    if turn_transport:
-        turn_transport.close()
     await engine.dispose()
 
 

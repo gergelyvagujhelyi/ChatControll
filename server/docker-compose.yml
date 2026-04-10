@@ -14,6 +14,29 @@ services:
       timeout: 3s
       retries: 5
 
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/turnserver.conf:ro
+    environment:
+      TURN_SECRET: ${TURN_SECRET:?Set TURN_SECRET in .env}
+    command: >
+      turnserver
+      --no-cli
+      --no-tls
+      --no-dtls
+      --realm=chatcontroll
+      --use-auth-secret
+      --static-auth-secret=${TURN_SECRET}
+      --listening-port=3478
+      --min-port=49152
+      --max-port=65535
+      --external-ip=${TURN_RELAY_IP:?Set TURN_RELAY_IP in .env}
+      --log-file=stdout
+      --simple-log
+
   server:
     build: .
     restart: unless-stopped
@@ -21,11 +44,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://chatcontroll:${POSTGRES_PASSWORD}@db/chatcontroll
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       FIREBASE_CREDENTIALS: ${FIREBASE_CREDENTIALS:-}
-      TURN_ENABLED: ${TURN_ENABLED:-false}
-      TURN_RELAY_IP: ${TURN_RELAY_IP:-127.0.0.1}
+      TURN_RELAY_IP: ${TURN_RELAY_IP:-}
       TURN_SECRET: ${TURN_SECRET:-}
-      TURN_USERNAME: ${TURN_USERNAME:-}
-      TURN_PASSWORD: ${TURN_PASSWORD:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       MAX_MESSAGES_PER_MINUTE: ${MAX_MESSAGES_PER_MINUTE:-60}
       DEBUG: "false"
