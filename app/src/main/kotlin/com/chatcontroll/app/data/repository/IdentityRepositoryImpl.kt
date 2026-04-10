@@ -149,6 +149,10 @@ class IdentityRepositoryImpl @Inject constructor(
         val resolved = apiService.resolveShareCode(shareCode)
             ?: throw IllegalArgumentException("Unknown share code")
 
+        if (resolved.userId == keyManager.getUserId()) {
+            throw IllegalArgumentException("Cannot add yourself as a contact")
+        }
+
         val pubIdKey = try {
             Base64.decode(resolved.publicIdentityKey, Base64.NO_WRAP)
         } catch (e: IllegalArgumentException) {
