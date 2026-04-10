@@ -55,6 +55,9 @@ class MessageRepositoryImpl @Inject constructor(
     /** Track skipped syncs for messages missing a PQC signature (may be transient). */
     private val pqcSigMissCounts = ConcurrentHashMap<String, Int>()
 
+    /** Track skipped syncs for control messages missing a PQC signature. */
+    private val ctrlPqcSigMissCounts = ConcurrentHashMap<String, Int>()
+
     /** Track peers already notified with session_reset to avoid duplicate signals. */
     private val sessionResetSentTo: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -759,8 +762,17 @@ class MessageRepositoryImpl @Inject constructor(
         // on next sync — the sender may have just upgraded to PQC and our local
         // contact DB hasn't received their signing key yet.
         if (pqcSignKey != null && pqcSignKey.isNotEmpty() && dto.pqcSignature.isEmpty()) {
-            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
-                "$ctrl ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}")
+            val misses = (ctrlPqcSigMissCounts[dto.messageId] ?: 0) + 1
+            ctrlPqcSigMissCounts[dto.messageId] = misses
+            if (misses >= MAX_PQC_SIG_MISS_RETRIES) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                    "$ctrl ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}, rejecting after $misses attempts")
+                ctrlPqcSigMissCounts.remove(dto.messageId)
+                receivedIds.add(dto.messageId)
+            } else {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                    "$ctrl ML-DSA signature missing from PQC-capable sender ${dto.senderId.take(8)}, skipping for retry ($misses/$MAX_PQC_SIG_MISS_RETRIES)")
+            }
             return true
         }
         if (dto.pqcSignature.isNotEmpty() && pqcSignKey != null && pqcSignKey.isNotEmpty()) {
@@ -855,7 +867,7 @@ class MessageRepositoryImpl @Inject constructor(
                 mlDsaPrivKey.fill(0)
             }
         } catch (e: Exception) {
-            android.util.Log.w("MessageRepo", "ML-DSA signing failed: ${e.message}")
+            if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo", "ML-DSA signing failed: ${e.message}")
             ""
         }
     }

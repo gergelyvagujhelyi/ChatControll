@@ -59,9 +59,13 @@ async def websocket_endpoint(
     user_id: Optional[str] = None
 
     try:
-        # Wait for auth message
+        # Wait for auth message (with timeout to prevent pre-auth resource exhaustion)
         await websocket.accept()
-        raw = await websocket.receive_text()
+        try:
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        except asyncio.TimeoutError:
+            await websocket.close(code=4008, reason="Auth timeout")
+            return
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:

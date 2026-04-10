@@ -45,6 +45,10 @@ async def send_message(
 
     The server never inspects or logs the encrypted body.
     """
+    # Prevent self-send
+    if request.recipient_id == x_user_id:
+        raise HTTPException(status_code=400, detail="Cannot send to self")
+
     # Rate limiting
     if not await check_rate_limit(db, x_user_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")

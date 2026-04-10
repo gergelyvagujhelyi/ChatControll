@@ -9,7 +9,7 @@ import hashlib
 import logging
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,7 +70,7 @@ async def bootstrap_identity(
 
 @router.get("/{user_id}/keys", response_model=KeyBundleResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def fetch_key_bundle(
-    user_id: str,
+    user_id: str = Path(..., pattern=r"^[a-f0-9]{16}$"),
     db: AsyncSession = Depends(get_db),
 ) -> KeyBundleResponse:
     """Fetch a user's public key bundle for session establishment."""
@@ -92,7 +92,7 @@ async def fetch_key_bundle(
 
 @router.get("/resolve/{share_code}", response_model=ResolveShareCodeResponse, dependencies=[Depends(check_ip_rate_limit)])
 async def resolve_share_code(
-    share_code: str,
+    share_code: str = Path(..., pattern=r"^[A-Za-z0-9_-]{16}$"),
     db: AsyncSession = Depends(get_db),
 ) -> ResolveShareCodeResponse:
     """Resolve a share code to a user's public key bundle.

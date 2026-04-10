@@ -194,6 +194,6 @@ async def verify_auth_token(
             )
             await _sess.commit()
     except Exception:
-        pass
+        logger.warning("Failed to update last_seen_at for %s", verified_user_id[:8])
 
     return verified_user_id

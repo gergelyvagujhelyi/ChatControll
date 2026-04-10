@@ -21,7 +21,6 @@ import com.chatcontroll.app.di.DatabaseModule
 import com.chatcontroll.app.call.CallManager
 import com.chatcontroll.app.domain.model.CallDirection
 import com.chatcontroll.app.domain.model.CallStatus
-import com.chatcontroll.app.domain.model.PrivacySettings
 import com.chatcontroll.app.domain.repository.IdentityRepository
 import com.chatcontroll.app.domain.repository.SettingsRepository
 import com.chatcontroll.app.notification.ChatNotificationManager
@@ -29,7 +28,6 @@ import com.chatcontroll.app.ui.navigation.ChatNavGraph
 import com.chatcontroll.app.ui.navigation.Routes
 import com.chatcontroll.app.ui.theme.ChatControllTheme
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -55,11 +53,17 @@ class MainActivity : ComponentActivity() {
             WindowManager.LayoutParams.FLAG_SECURE,
         )
 
-        // Asynchronously clear the flag if the user has disabled screen security
+        // Reactively apply/clear FLAG_SECURE whenever the setting changes
         lifecycleScope.launch {
-            val settings = settingsRepository.getPrivacySettings().firstOrNull() ?: PrivacySettings()
-            if (!settings.screenSecurity) {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            settingsRepository.getPrivacySettings().collect { settings ->
+                if (settings.screenSecurity) {
+                    window.setFlags(
+                        WindowManager.LayoutParams.FLAG_SECURE,
+                        WindowManager.LayoutParams.FLAG_SECURE,
+                    )
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
             }
         }
 

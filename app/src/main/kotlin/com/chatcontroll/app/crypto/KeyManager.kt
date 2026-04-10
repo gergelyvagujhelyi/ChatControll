@@ -205,13 +205,14 @@ class KeyManager @Inject constructor(
      * so we generate a random key and store it in EncryptedSharedPreferences
      * which is itself protected by an Android Keystore master key.
      */
+    @Synchronized
     fun getDatabaseKey(): ByteArray {
         val existing = encryptedPrefs.getString(KEY_DB_PASSPHRASE, null)
         if (existing != null) {
             return existing.hexToBytes()
         }
         val key = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
-        encryptedPrefs.edit().putString(KEY_DB_PASSPHRASE, key.toHex()).apply()
+        encryptedPrefs.edit().putString(KEY_DB_PASSPHRASE, key.toHex()).commit()
         return key
     }
 

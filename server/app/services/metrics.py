@@ -86,8 +86,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
         # Normalize paths to avoid cardinality explosion
         path = request.url.path
+        matched = False
         for prefix in ("/v1/identity/", "/v1/messages/", "/v1/calls/", "/v1/push/"):
             if path.startswith(prefix):
+                matched = True
                 rest = path[len(prefix):]
                 if rest.startswith("resolve/"):
                     path = prefix + "resolve/{code}"
@@ -97,6 +99,8 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                                   "register", "signal", "ice-servers", "me/keys"):
                     path = prefix + "{id}"
                 break
+        if not matched and path not in ("/health", "/metrics"):
+            path = "{unknown}"
 
         metrics.record(request.method, path, response.status_code, duration)
         return response
