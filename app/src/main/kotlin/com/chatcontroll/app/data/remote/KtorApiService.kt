@@ -102,18 +102,16 @@ class KtorApiService @Inject constructor(
     }
 
     override suspend fun fetchKeyBundle(userId: String): KeyBundleDto? {
-        val response: HttpResponse = client.get("/v1/identity/$userId/keys") {
-            header("Authorization", "Bearer ${authToken()}")
-        }
+        // No auth header — this endpoint is unauthenticated (IP rate-limited only)
+        val response: HttpResponse = client.get("/v1/identity/$userId/keys")
         if (response.status.value == 404) return null
         check(response.status.isSuccess()) { "Fetch key bundle failed: ${response.status}" }
         return response.body()
     }
 
     override suspend fun resolveShareCode(shareCode: String): ResolveShareCodeResponse? {
-        val response: HttpResponse = client.get("/v1/identity/resolve/$shareCode") {
-            header("Authorization", "Bearer ${authToken()}")
-        }
+        // No auth header — this endpoint is unauthenticated (IP rate-limited only)
+        val response: HttpResponse = client.get("/v1/identity/resolve/$shareCode")
         if (response.status.value == 404) return null
         check(response.status.isSuccess()) { "Resolve share code failed: ${response.status}" }
         return response.body()

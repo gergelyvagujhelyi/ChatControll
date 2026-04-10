@@ -177,9 +177,10 @@ app = FastAPI(
     description="Privacy-first encrypted message relay server.",
     version="0.4.1",
     lifespan=lifespan,
-    # Disable docs in production
+    # Disable docs and OpenAPI schema in production
     docs_url="/docs" if DEBUG else None,
     redoc_url=None,
+    openapi_url="/openapi.json" if DEBUG else None,
 )
 
 class BodySizeLimitMiddleware:

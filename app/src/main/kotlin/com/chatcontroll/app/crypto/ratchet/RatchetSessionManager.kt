@@ -107,7 +107,7 @@ class RatchetSessionManager @Inject constructor(
         // to avoid aliasing — without it, classicalSecret.fill(0) zeroes ikm.
         val ikm = if (isPqcEstablished) classicalSecret + pqcSecret else classicalSecret.copyOf()
         classicalSecret.fill(0)
-        if (isPqcEstablished) pqcSecret.fill(0)
+        pqcSecret.fill(0)
 
         val sharedSecret = hkdfSha256(
             ikm = ikm,
@@ -159,8 +159,8 @@ class RatchetSessionManager @Inject constructor(
         }
 
         return SessionKeys(
-            sendKey = if (isInitiator) chainA else chainB,
-            receiveKey = if (isInitiator) chainB else chainA,
+            sendKey = (if (isInitiator) chainA else chainB).copyOf(),
+            receiveKey = (if (isInitiator) chainB else chainA).copyOf(),
             sessionId = sessionId,
             pqcEstablished = isPqcEstablished,
         )

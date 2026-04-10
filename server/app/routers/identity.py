@@ -39,6 +39,28 @@ async def bootstrap_identity(
     Generates a random user_id and a share code derived from the public
     identity key. Stores public keys for contact discovery.
     """
+    # Validate that submitted keys are well-formed Base64 before storing.
+    # This prevents garbage data from causing decode errors in other clients.
+    for field_name, value in [
+        ("public_signing_key", request.public_signing_key),
+        ("public_identity_key", request.public_identity_key),
+    ]:
+        if not value:
+            raise HTTPException(status_code=400, detail=f"{field_name} is required")
+        try:
+            base64.b64decode(value, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 in {field_name}")
+    for field_name, value in [
+        ("pqc_encapsulation_key", request.pqc_encapsulation_key),
+        ("pqc_signing_key", request.pqc_signing_key),
+    ]:
+        if value:
+            try:
+                base64.b64decode(value, validate=True)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 in {field_name}")
+
     user_id = secrets.token_hex(8)  # 16 chars
     share_code = _derive_share_code(request.public_identity_key)
 
