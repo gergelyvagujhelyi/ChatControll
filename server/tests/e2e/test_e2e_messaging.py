@@ -37,7 +37,7 @@ async def test_add_pqc_contact_returns_pqc_keys(client: AsyncClient, alice: User
 
 @pytest.mark.asyncio
 async def test_resolve_unknown_share_code_returns_404(client: AsyncClient):
-    resp = await client.get("/v1/identity/resolve/NONEXISTENT")
+    resp = await client.get("/v1/identity/resolve/NONEXISTENT_test")
     assert resp.status_code == 404
 
 

@@ -38,6 +38,8 @@ _ALLOWED_SIGNAL_TYPES = frozenset({
 })
 _MAX_CALL_OFFERS_PER_MINUTE = 10
 _MAX_SIGNALS_PER_MINUTE = 100
+_MAX_AUTH_MESSAGE_BYTES = 8192      # Auth/ping messages are small
+_MAX_SIGNAL_MESSAGE_BYTES = 81920   # Call signals can carry large encrypted payloads
 
 # Per-user rate limit state shared across all WebSocket connections.
 # Protected by _ws_rate_lock to prevent interleaved read-modify-write
@@ -65,6 +67,9 @@ async def websocket_endpoint(
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
         except asyncio.TimeoutError:
             await websocket.close(code=4008, reason="Auth timeout")
+            return
+        if len(raw) > _MAX_AUTH_MESSAGE_BYTES:
+            await websocket.close(code=4009, reason="Message too large")
             return
         try:
             msg = json.loads(raw)
@@ -144,6 +149,11 @@ async def websocket_endpoint(
             except asyncio.TimeoutError:
                 await websocket.close(code=4008, reason="Idle timeout")
                 break
+            if len(raw) > _MAX_SIGNAL_MESSAGE_BYTES:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Message too large"})
+                )
+                continue
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:

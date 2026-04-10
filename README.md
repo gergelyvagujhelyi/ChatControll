@@ -196,6 +196,8 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 21. **QA security audit fixes (v0.4.1)** — Fixed 17 bugs across server and client from a full security audit: WebSocket pre-auth DoS (10s auth timeout), malformed Base64 envelope crashing sync loop, key rotation crash recovery promoting unconfirmed keys, FLAG_SECURE not reactive to setting changes, control message infinite retry without PQC signature, production logcat leak, self-send on message endpoint, Dockerfile running as root, metrics cardinality pollution, missing nginx WebSocket headers, path parameter validation, and `getDatabaseKey()` race condition. Added automatic purge of pending messages older than 30 days.
 
+22. **Privacy & hardening (v0.4.2)** — WebRTC calls now force TURN relay when available, preventing IP address leakage via STUN direct connections. FrameCryptor key derivation uses per-call salt (call ID) for session binding. WebSocket frame size limits (8 KB pre-auth, 80 KB post-auth) prevent memory exhaustion from oversized frames. Pending call signal buffer capped at 10K recipients with global stale-entry pruning. Base64 validation added to key rotation endpoint for `public_identity_key` and `pqc_encapsulation_key`. Cleartext traffic exemptions moved to debug-only network security config.
+
 ## Next Priorities
 
 1. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.

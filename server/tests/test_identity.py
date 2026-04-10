@@ -49,7 +49,7 @@ async def test_fetch_key_bundle(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_fetch_key_bundle_not_found(client: AsyncClient):
     """GET /v1/identity/{unknown}/keys should return 404."""
-    response = await client.get("/v1/identity/nonexistent/keys")
+    response = await client.get("/v1/identity/deadbeef01234567/keys")
     assert response.status_code == 404
 
 
@@ -75,5 +75,5 @@ async def test_resolve_share_code(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_resolve_unknown_share_code(client: AsyncClient):
     """GET /v1/identity/resolve/{unknown} should return 404."""
-    response = await client.get("/v1/identity/resolve/UNKNOWN_CODE")
+    response = await client.get("/v1/identity/resolve/UNKNOWN_CODEtest")
     assert response.status_code == 404

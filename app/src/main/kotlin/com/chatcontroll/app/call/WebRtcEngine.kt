@@ -54,9 +54,20 @@ class WebRtcEngine(context: Context) {
 
     @Synchronized
     fun createPeerConnection(iceServers: List<PeerConnection.IceServer> = DEFAULT_ICE_SERVERS) {
+        val hasTurn = iceServers.any { server ->
+            server.urls.any { it.startsWith("turn:") || it.startsWith("turns:") }
+        }
         val config = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            // Force TURN relay when available to prevent IP address leakage
+            // via STUN. Falls back to ALL only when no TURN server is configured
+            // (development / fallback) so calls can still work direct.
+            iceTransportsType = if (hasTurn) {
+                PeerConnection.IceTransportsType.RELAY
+            } else {
+                PeerConnection.IceTransportsType.ALL
+            }
         }
 
         peerConnection = factory.createPeerConnection(config, object : PeerConnection.Observer {
@@ -158,17 +169,20 @@ class WebRtcEngine(context: Context) {
     /**
      * Enable frame-level E2E encryption on all RTP sender/receiver tracks
      * using AES-GCM via the WebRTC FrameCryptor API.
+     *
+     * @param salt Per-call salt for HKDF key derivation (e.g. callId bytes).
+     *             Binds derived frame keys to this specific call session.
      */
     @Synchronized
-    fun enableFrameEncryption(key: ByteArray) {
+    fun enableFrameEncryption(key: ByteArray, salt: ByteArray = ByteArray(0)) {
         val pc = peerConnection ?: return
 
         val kp = FrameCryptorFactory.createFrameCryptorKeyProvider(
             /* isShared */ true,
             /* sharedSecret */ key,
             /* sharedSecretLength */ key.size,
-            /* salt */ ByteArray(0),
-            /* saltLength */ 0,
+            /* salt */ salt,
+            /* saltLength */ salt.size,
             /* keySize */ key.size,
             /* forceExpandedAesGcmIvToFullSizeWhenNeeded */ true,
             FrameCryptorKeyDerivationAlgorithm.HKDF,
