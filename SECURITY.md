@@ -52,7 +52,7 @@ recv_key = shared_secret[32:64]
 - User ID (random, no PII)
 - Public key bundle
 - FCM push token (can be correlated to Google account — see limitations)
-- Encrypted message envelopes in transit (deleted after delivery ACK)
+- Encrypted message envelopes in transit (deleted after delivery ACK, or purged after 30 days if undelivered)
 - Timing of message submission and retrieval
 
 ### What the Server Does NOT Know
@@ -73,13 +73,14 @@ The `RatchetSessionManager` implements a Signal-style Double Ratchet:
 - **Out-of-order tolerance**: Up to 256 skipped message keys are cached for messages that arrive out of order.
 - **Persistence**: Ratchet session state (root key, chain keys, message counters, skipped keys) is persisted to EncryptedSharedPreferences and survives app restarts. Session-to-contact mapping is also persisted, so ongoing conversations resume without re-keying. Full DB-backed persistence for ratchet chains is a future improvement for multi-device support.
 
-### Key Rotation (v0.3.3+)
-`rotateIdentityKeys()` generates new Ed25519 + X25519 + ML-KEM-768 keys and registers them with the relay server. The protocol uses crash-safe staged promotion:
+### Key Rotation (v0.3.3+, crash recovery hardened v0.4.1)
+`rotateIdentityKeys()` generates new Ed25519 + X25519 + ML-KEM-768 + ML-DSA-65 keys and registers them with the relay server. The protocol uses crash-safe staged promotion:
 1. New keys are staged locally before the server call.
-2. Server validates a proof-of-possession signature (new key signs itself).
-3. On server acceptance, staged keys are promoted to active.
-4. On app crash between server acceptance and local promotion, the next launch detects staged keys and auto-promotes them.
-5. All session caches are invalidated — peers re-establish on next message.
+2. Server validates proof-of-possession signatures (Ed25519 and ML-DSA-65 new keys sign themselves).
+3. On server acceptance, a `server_confirmed` flag is persisted synchronously, then staged keys are promoted to active.
+4. On app crash between staging and server call, the next launch detects staged keys without `server_confirmed` and discards them (the server still has the old keys).
+5. On app crash between server acceptance and local promotion, the next launch detects staged keys with `server_confirmed` and promotes them.
+6. All session caches are invalidated — peers re-establish on next message.
 
 **Remaining work**: No automated rotation schedule and no old-key grace period for in-flight messages.
 
