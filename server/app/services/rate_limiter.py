@@ -31,19 +31,13 @@ async def check_rate_limit(db: AsyncSession, user_id: str) -> bool:
                 db.add(RateLimit(user_id=user_id, message_count=1, window_start=now))
                 await db.flush()
         except IntegrityError:
-            # Another request inserted the row concurrently; re-read with lock
+            # Another request inserted the row concurrently; re-read
             result = await db.execute(
-                select(RateLimit).where(RateLimit.user_id == user_id).with_for_update()
+                select(RateLimit).where(RateLimit.user_id == user_id)
             )
             rate = result.scalar_one_or_none()
             if rate is None:
                 return True  # Shouldn't happen, but allow the request
-            # Check window expiration (same logic as the main path)
-            if rate.window_start is None or rate.window_start < window_start:
-                rate.message_count = 1
-                rate.window_start = now
-                await db.flush()
-                return True
             if rate.message_count >= MAX_MESSAGES_PER_MINUTE:
                 return False
             rate.message_count += 1
