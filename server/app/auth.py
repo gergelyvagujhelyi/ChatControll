@@ -14,12 +14,13 @@ both Ed25519 AND ML-DSA-65 to forge an auth token.
 import base64
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
 from fastapi import Depends, Header, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -180,5 +181,19 @@ async def verify_auth_token(
     except ValueError as e:
         logger.debug("Auth token rejected for %s: %s", claimed_user_id[:8], e)
         raise HTTPException(status_code=401, detail="Authentication failed")
+
+    # Update last_seen_at in a separate short-lived session so it commits
+    # regardless of whether the calling endpoint commits its own transaction.
+    try:
+        from app.database import async_session as _session_factory
+        async with _session_factory() as _sess:
+            await _sess.execute(
+                update(Identity)
+                .where(Identity.user_id == verified_user_id)
+                .values(last_seen_at=datetime.now(timezone.utc).replace(tzinfo=None))
+            )
+            await _sess.commit()
+    except Exception:
+        logger.warning("Failed to update last_seen_at for %s", verified_user_id[:8])
 
     return verified_user_id

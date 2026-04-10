@@ -205,13 +205,14 @@ class KeyManager @Inject constructor(
      * so we generate a random key and store it in EncryptedSharedPreferences
      * which is itself protected by an Android Keystore master key.
      */
+    @Synchronized
     fun getDatabaseKey(): ByteArray {
         val existing = encryptedPrefs.getString(KEY_DB_PASSPHRASE, null)
         if (existing != null) {
             return existing.hexToBytes()
         }
         val key = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
-        encryptedPrefs.edit().putString(KEY_DB_PASSPHRASE, key.toHex()).apply()
+        encryptedPrefs.edit().putString(KEY_DB_PASSPHRASE, key.toHex()).commit()
         return key
     }
 
@@ -341,9 +342,9 @@ class KeyManager @Inject constructor(
             editor.putString(KEY_MLDSA_PRIVATE, mlDsaPriv)
         }
 
-        // Clear staged keys and commit synchronously for crash safety.
-        // This is the crash-recovery path — apply() could lose data if the
-        // process dies between return and the async disk write.
+        // Clear staged keys and server-confirmed flag. Commit synchronously
+        // for crash safety — apply() could lose data if the process dies
+        // between return and the async disk write.
         editor
             .remove(PENDING_PUBLIC_SIGNING)
             .remove(PENDING_PRIVATE_SIGNING)
@@ -353,11 +354,28 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PQC_DECAPSULATION)
             .remove(PENDING_MLDSA_PUBLIC)
             .remove(PENDING_MLDSA_PRIVATE)
+            .remove(PENDING_SERVER_CONFIRMED)
             .commit()
     }
 
     fun hasStagedKeys(): Boolean {
         return encryptedPrefs.contains(PENDING_PUBLIC_SIGNING)
+    }
+
+    /**
+     * Mark that the server has confirmed the staged key rotation.
+     * Must be called after the server accepts the new keys and before
+     * [promoteStagedKeys]. Uses commit() so the flag survives a crash
+     * between server confirmation and local promotion.
+     */
+    fun markRotationConfirmedByServer() {
+        encryptedPrefs.edit()
+            .putBoolean(PENDING_SERVER_CONFIRMED, true)
+            .commit()
+    }
+
+    fun isRotationConfirmedByServer(): Boolean {
+        return encryptedPrefs.getBoolean(PENDING_SERVER_CONFIRMED, false)
     }
 
     fun clearStagedKeys() {
@@ -374,6 +392,7 @@ class KeyManager @Inject constructor(
             .remove(PENDING_PQC_DECAPSULATION)
             .remove(PENDING_MLDSA_PUBLIC)
             .remove(PENDING_MLDSA_PRIVATE)
+            .remove(PENDING_SERVER_CONFIRMED)
             .commit()
     }
 
@@ -409,6 +428,7 @@ class KeyManager @Inject constructor(
         private const val PENDING_PQC_DECAPSULATION = "pending_pqc_dk"
         private const val PENDING_MLDSA_PUBLIC = "pending_mldsa_pub"
         private const val PENDING_MLDSA_PRIVATE = "pending_mldsa_priv"
+        private const val PENDING_SERVER_CONFIRMED = "pending_server_confirmed"
     }
 }
 

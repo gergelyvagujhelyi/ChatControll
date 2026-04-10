@@ -249,4 +249,4 @@ async def health_check() -> HealthResponse:
             status_code=503,
             content={"status": "unhealthy", "version": app.version, "detail": "Database unreachable"},
         )
-    return HealthResponse()
+    return HealthResponse(version=app.version)

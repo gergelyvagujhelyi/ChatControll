@@ -133,7 +133,9 @@ object DatabaseModule {
         )
             .openHelperFactory(factory)
             .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
-            .fallbackToDestructiveMigration()
+            // No fallbackToDestructiveMigration() — if a migration is missing,
+            // Room will throw and provideDatabase() catches it, shows a dialog,
+            // and recreates the DB. This is safer than silently wiping data.
             .build()
     }
 
