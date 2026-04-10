@@ -26,6 +26,7 @@ METRICS_TOKEN: str = os.getenv("METRICS_TOKEN", "")
 TURN_RELAY_IP: str = os.getenv("TURN_RELAY_IP", "")
 TURN_SECRET: str = os.getenv("TURN_SECRET", "")
 TURN_CREDENTIAL_TTL: int = int(os.getenv("TURN_CREDENTIAL_TTL", "3600"))
+PENDING_MESSAGE_TTL_DAYS: int = int(os.getenv("PENDING_MESSAGE_TTL_DAYS", "30"))
 # Comma-separated list of trusted proxy IPs that may set X-Forwarded-For
 TRUSTED_PROXIES: set = {
     ip.strip()
