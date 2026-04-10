@@ -116,6 +116,7 @@ async def _detect_gcp_external_ip() -> str:
             resp.raise_for_status()
             return resp.text.strip()
     except Exception:
+        logging.getLogger(__name__).debug("GCP metadata lookup failed, TURN relay IP not auto-detected")
         return ""
 
 
@@ -131,6 +132,10 @@ async def lifespan(app: FastAPI):
         turn_ip = await _detect_gcp_external_ip()
     if turn_ip and TURN_SECRET:
         app.state.turn_relay_ip = turn_ip
+    elif TURN_SECRET:
+        logging.getLogger(__name__).warning(
+            "TURN_SECRET is set but no relay IP found; TURN relay will be disabled."
+        )
 
     yield
 

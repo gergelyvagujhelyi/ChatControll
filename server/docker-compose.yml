@@ -26,7 +26,7 @@ services:
       2>/dev/null || echo "${TURN_RELAY_IP}")
       && exec turnserver -c /etc/turnserver.conf
       --static-auth-secret=${TURN_SECRET:?Set TURN_SECRET in .env}
-      --external-ip=$$EXTERNAL_IP'
+      $${EXTERNAL_IP:+--external-ip=$$EXTERNAL_IP}'
     healthcheck:
       test: ["CMD-SHELL", "turnutils_peer -L 127.0.0.1 -p 3478 || exit 1"]
       interval: 30s
