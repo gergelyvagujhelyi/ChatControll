@@ -115,6 +115,21 @@ async def _run_alembic_upgrade() -> None:
     await loop.run_in_executor(None, _upgrade)
 
 
+async def _detect_gcp_external_ip() -> str:
+    """Query the GCP metadata server for this instance's external IP."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            resp = await client.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            resp.raise_for_status()
+            return resp.text.strip()
+    except Exception:
+        return ""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start services and run database migrations."""
@@ -122,8 +137,11 @@ async def lifespan(app: FastAPI):
 
     # TURN is handled by the coturn Docker container; the app server
     # only needs the relay IP to build ICE server responses.
-    if TURN_RELAY_IP and TURN_SECRET:
-        app.state.turn_relay_ip = TURN_RELAY_IP
+    turn_ip = TURN_RELAY_IP
+    if not turn_ip:
+        turn_ip = await _detect_gcp_external_ip()
+    if turn_ip and TURN_SECRET:
+        app.state.turn_relay_ip = turn_ip
 
     yield
 

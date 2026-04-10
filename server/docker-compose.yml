@@ -20,22 +20,17 @@ services:
     network_mode: host
     volumes:
       - ./turnserver.conf:/etc/turnserver.conf:ro
-    environment:
-      TURN_SECRET: ${TURN_SECRET:?Set TURN_SECRET in .env}
     command: >
-      turnserver
-      --no-cli
-      --no-tls
-      --no-dtls
-      --realm=chatcontroll
-      --use-auth-secret
-      --static-auth-secret=${TURN_SECRET}
-      --listening-port=3478
-      --min-port=49152
-      --max-port=65535
-      --external-ip=${TURN_RELAY_IP:?Set TURN_RELAY_IP in .env}
-      --log-file=stdout
-      --simple-log
+      sh -c 'EXTERNAL_IP=$$(wget -qO- --header="Metadata-Flavor: Google"
+      http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)
+      && exec turnserver -c /etc/turnserver.conf
+      --static-auth-secret=${TURN_SECRET:?Set TURN_SECRET in .env}
+      --external-ip=$$EXTERNAL_IP'
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_peer -L 127.0.0.1 -p 3478 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   server:
     build: .
