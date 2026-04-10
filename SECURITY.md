@@ -237,7 +237,7 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] WebSocket call signal validation and rate limiting
 - [x] Debug logging gated behind BuildConfig.DEBUG
 - [x] Call signal signatures (Ed25519) — prevents signal injection
-- [x] Per-challenge TURN nonce rotation (RFC 5389 compliant)
+- [x] Per-challenge TURN nonce rotation (RFC 5389 compliant, handled by coturn)
 - [x] ICE candidate bounds (max 100 pending per call)
 - [x] Certificate pinning with real SPKI hashes
 - [x] Ratchet state persistence (survive app restart) — sessions persisted to EncryptedSharedPreferences
