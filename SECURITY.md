@@ -6,12 +6,18 @@
 ```
 shared_secret = HKDF-SHA256(
     IKM = X25519(local_priv, remote_pub) || ML-KEM-768.Encapsulate(remote_ek),
-    salt = "ChatControll-v1-session",
+    salt = "ChatControll-v1-ratchet-init",
     info = "hybrid-key-establishment",
+    length = 32
+)
+chain_material = HKDF-SHA256(
+    IKM = shared_secret,
+    salt = "ChatControll-v1-chains",
+    info = "bidirectional-chains",
     length = 64
 )
-send_key = shared_secret[0:32]
-recv_key = shared_secret[32:64]
+send_key = chain_material[0:32]   (initiator)
+recv_key = chain_material[32:64]  (initiator)
 ```
 
 - **Classical component**: X25519 (Curve25519 ECDH). Well-vetted, widely deployed.
@@ -52,7 +58,7 @@ recv_key = shared_secret[32:64]
 - User ID (random, no PII)
 - Public key bundle
 - FCM push token (can be correlated to Google account — see limitations)
-- Encrypted message envelopes in transit (deleted after delivery ACK)
+- Encrypted message envelopes in transit (deleted after delivery ACK, or purged after 30 days if undelivered)
 - Timing of message submission and retrieval
 
 ### What the Server Does NOT Know
@@ -73,13 +79,14 @@ The `RatchetSessionManager` implements a Signal-style Double Ratchet:
 - **Out-of-order tolerance**: Up to 256 skipped message keys are cached for messages that arrive out of order.
 - **Persistence**: Ratchet session state (root key, chain keys, message counters, skipped keys) is persisted to EncryptedSharedPreferences and survives app restarts. Session-to-contact mapping is also persisted, so ongoing conversations resume without re-keying. Full DB-backed persistence for ratchet chains is a future improvement for multi-device support.
 
-### Key Rotation (v0.3.3+)
-`rotateIdentityKeys()` generates new Ed25519 + X25519 + ML-KEM-768 keys and registers them with the relay server. The protocol uses crash-safe staged promotion:
+### Key Rotation (v0.3.3+, crash recovery hardened v0.4.1)
+`rotateIdentityKeys()` generates new Ed25519 + X25519 + ML-KEM-768 + ML-DSA-65 keys and registers them with the relay server. The protocol uses crash-safe staged promotion:
 1. New keys are staged locally before the server call.
-2. Server validates a proof-of-possession signature (new key signs itself).
-3. On server acceptance, staged keys are promoted to active.
-4. On app crash between server acceptance and local promotion, the next launch detects staged keys and auto-promotes them.
-5. All session caches are invalidated — peers re-establish on next message.
+2. Server validates proof-of-possession signatures (Ed25519 and ML-DSA-65 new keys sign themselves).
+3. On server acceptance, a `server_confirmed` flag is persisted synchronously, then staged keys are promoted to active.
+4. On app crash between staging and server call, the next launch detects staged keys without `server_confirmed` and discards them (the server still has the old keys).
+5. On app crash between server acceptance and local promotion, the next launch detects staged keys with `server_confirmed` and promotes them.
+6. All session caches are invalidated — peers re-establish on next message.
 
 **Remaining work**: No automated rotation schedule and no old-key grace period for in-flight messages.
 
@@ -180,7 +187,7 @@ Call signaling has been progressively hardened:
 
 ### Security Hardening (v0.3.10 / server v0.3.5)
 - **Key material zeroization**: Private signing keys, PQC decapsulation keys, classical/PQC shared secrets, HKDF inputs, and chain material are zeroized after use to limit lifetime in memory.
-- **Ratchet state rollback**: Encrypt/decrypt snapshot persisted state before mutation; rollback uses the snapshot instead of re-reading from disk (which could itself fail).
+- **Ratchet state invalidation on failure**: If persistence fails after ratchet mutation, the session is invalidated (removed from memory and disk) to force re-establishment, preventing key/nonce reuse.
 - **Ratchet header validation**: `messageNumber` and `previousChainLength` from untrusted input are validated as non-negative before use.
 - **PQC downgrade on failure**: If KEM ciphertext is present but session re-establishment fails, the message is rejected rather than silently falling back to classical-only keys.
 - **Server TOCTOU fix**: Message queue depth check uses `FOR UPDATE` row lock on the recipient's Identity to prevent concurrent requests bypassing `MAX_PENDING_MESSAGES_PER_USER`.
@@ -194,7 +201,7 @@ Call signaling has been progressively hardened:
 - **Late call_answer rejection**: The `call_answer` handler now checks for terminal call status, preventing a queued answer from reviving a call the user already hung up.
 - **SPKI OID validation**: Server-side ML-DSA-65 SPKI header parsing now validates the OID bytes, not just length, preventing garbage SPKI headers from being accepted.
 - **PQC signing key persistence**: Contact PQC signing keys are now stored during session upgrade in `tryEstablishSession`, closing a gap where PQC signatures were never verified for contacts upgraded via inbound messages.
-- **Control message retry on PQC sig missing**: Control messages (session_reset, account_deleted) with missing PQC signatures are no longer permanently ACK'd — they are skipped for retry on next sync, handling the key propagation race.
+- **Control message retry on PQC sig missing**: Control messages (session_reset, account_deleted) with missing PQC signatures are skipped for retry on next sync to handle the key propagation race. Since v0.4.1, retries are bounded by `MAX_PQC_SIG_MISS_RETRIES` (3) to prevent infinite retry loops.
 - **Process kill after wipe**: `wipeLocal()` now calls `exitProcess(0)` after database close to prevent the dead `@Singleton AppDatabase` from crashing subsequent DAO access.
 - **ML-DSA private key cleanup**: `BouncyCastlePqcProvider.sign()` now calls `tryDestroy()` on the reconstructed private key JCA object.
 - **Auth token deduplication**: Dual-signed token generation extracted from `KtorApiService`/`WebSocketClient` into `KeyManager.generateAuthToken()` to prevent implementations drifting apart.
@@ -230,7 +237,7 @@ Network security config includes SHA-256 SPKI pin hashes for the relay server's 
 - [x] WebSocket call signal validation and rate limiting
 - [x] Debug logging gated behind BuildConfig.DEBUG
 - [x] Call signal signatures (Ed25519) — prevents signal injection
-- [x] Per-challenge TURN nonce rotation (RFC 5389 compliant)
+- [x] Per-challenge TURN nonce rotation (RFC 5389 compliant, handled by coturn)
 - [x] ICE candidate bounds (max 100 pending per call)
 - [x] Certificate pinning with real SPKI hashes
 - [x] Ratchet state persistence (survive app restart) — sessions persisted to EncryptedSharedPreferences

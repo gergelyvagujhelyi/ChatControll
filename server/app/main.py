@@ -15,14 +15,15 @@ The server NEVER:
 - Uploads contact books or social graphs
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_RELAY_IP, TURN_SECRET
-from sqlalchemy import text
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, PENDING_MESSAGE_TTL_DAYS, TURN_RELAY_IP, TURN_SECRET
+from sqlalchemy import delete, text
 
 from app.database import async_session, engine
 from app.models.schemas import HealthResponse
@@ -120,6 +121,27 @@ async def _detect_gcp_external_ip() -> str:
         return ""
 
 
+async def _purge_expired_messages() -> None:
+    """Periodically delete pending messages older than PENDING_MESSAGE_TTL_DAYS."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.db import PendingMessage
+    logger = logging.getLogger(__name__)
+    while True:
+        await asyncio.sleep(3600)  # run once per hour
+        try:
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=PENDING_MESSAGE_TTL_DAYS)
+            async with async_session() as db:
+                result = await db.execute(
+                    delete(PendingMessage).where(PendingMessage.created_at < cutoff)
+                )
+                await db.commit()
+                if result.rowcount:
+                    logger.info("Purged %d expired pending messages (older than %d days)",
+                                result.rowcount, PENDING_MESSAGE_TTL_DAYS)
+        except Exception:
+            logger.exception("Failed to purge expired pending messages")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start services and run database migrations."""
@@ -137,8 +159,15 @@ async def lifespan(app: FastAPI):
             "TURN_SECRET is set but no relay IP found; TURN relay will be disabled."
         )
 
+    purge_task = asyncio.create_task(_purge_expired_messages())
+
     yield
 
+    purge_task.cancel()
+    try:
+        await purge_task
+    except asyncio.CancelledError:
+        pass
     await ws_manager.shutdown()
     await engine.dispose()
 
@@ -146,7 +175,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ChatControll Relay",
     description="Privacy-first encrypted message relay server.",
-    version="0.4.0",
+    version="0.4.1",
     lifespan=lifespan,
     # Disable docs in production
     docs_url="/docs" if DEBUG else None,

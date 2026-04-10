@@ -194,6 +194,8 @@ See [SECURITY.md](SECURITY.md) for the threat model, security notes, and known l
 
 20. **Security hardening (v0.4.0)** — Fixed 21 security and correctness bugs including: endCallGuard race condition leaking WebRTC resources, late call_answer reviving terminal calls, PQC signing key not persisted on contact upgrade (signature verification gap), SPKI header OID validation, process kill after database wipe, duplicated auth token logic, and unconditional secret zeroization.
 
+21. **QA security audit fixes (v0.4.1)** — Fixed 17 bugs across server and client from a full security audit: WebSocket pre-auth DoS (10s auth timeout), malformed Base64 envelope crashing sync loop, key rotation crash recovery promoting unconfirmed keys, FLAG_SECURE not reactive to setting changes, control message infinite retry without PQC signature, production logcat leak, self-send on message endpoint, Dockerfile running as root, metrics cardinality pollution, missing nginx WebSocket headers, path parameter validation, and `getDatabaseKey()` race condition. Added automatic purge of pending messages older than 30 days.
+
 ## Next Priorities
 
 1. **Multi-device support** — Allow users to link multiple devices under one identity, with device-specific ratchet sessions and synchronized message delivery.
