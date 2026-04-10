@@ -276,19 +276,33 @@ class MessageRepositoryImpl @Inject constructor(
                 if (kemCiphertext != null) {
                     if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
                         "Rejecting message with KEM ciphertext: PQC session establishment failed for ${dto.senderId.take(8)}")
-                    storeRejected(dto.messageId, dto.senderId, localUserId, EncryptedEnvelope(
-                        ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
-                        nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
-                    ), dto.timestamp)
+                    val rejectedEnvelope = try {
+                        EncryptedEnvelope(
+                            ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
+                            nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
+                        )
+                    } catch (_: IllegalArgumentException) {
+                        EncryptedEnvelope(ciphertext = ByteArray(0), nonce = ByteArray(0))
+                    }
+                    storeRejected(dto.messageId, dto.senderId, localUserId, rejectedEnvelope, dto.timestamp)
                     receivedIds.add(dto.messageId)
                 }
                 continue
             }
 
-            val envelope = EncryptedEnvelope(
-                ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
-                nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
-            )
+            val envelope = try {
+                EncryptedEnvelope(
+                    ciphertext = Base64.decode(dto.encryptedBody, Base64.NO_WRAP),
+                    nonce = Base64.decode(dto.nonce, Base64.NO_WRAP),
+                )
+            } catch (_: IllegalArgumentException) {
+                if (com.chatcontroll.app.BuildConfig.DEBUG) android.util.Log.w("MessageRepo",
+                    "Rejecting message with invalid Base64 from ${dto.senderId.take(8)}")
+                storeRejected(dto.messageId, dto.senderId, localUserId,
+                    EncryptedEnvelope(ciphertext = ByteArray(0), nonce = ByteArray(0)), dto.timestamp)
+                receivedIds.add(dto.messageId)
+                continue
+            }
 
             // Fetch contact once for signature checks and notification display
             var senderContact = contactDao.getByUserId(dto.senderId)

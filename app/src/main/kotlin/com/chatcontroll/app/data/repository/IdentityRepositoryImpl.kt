@@ -43,9 +43,13 @@ class IdentityRepositoryImpl @Inject constructor(
     override suspend fun hasIdentity(): Boolean = keyManager.hasIdentity()
 
     /**
-     * Crash recovery: if staged keys exist, the server accepted a key rotation
-     * but the app crashed before local promotion. Promote the staged keys and
-     * invalidate all session state so peers re-establish.
+     * Crash recovery: if staged keys exist AND the server confirmed the
+     * rotation, the app crashed before local promotion. Promote the staged
+     * keys and invalidate all session state so peers re-establish.
+     *
+     * If staged keys exist but the server never confirmed (crash between
+     * staging and the server call), discard them — the server still has
+     * the old keys, and promoting would cause an auth mismatch.
      *
      * This is intentionally separate from [getIdentity] to avoid surprising
      * side effects (key promotion + session clearing) inside a getter. Call
@@ -53,10 +57,14 @@ class IdentityRepositoryImpl @Inject constructor(
      */
     suspend fun recoverFromInterruptedKeyRotation() {
         if (!keyManager.hasStagedKeys()) return
-        keyManager.promoteStagedKeys()
-        keyManager.clearSessionCache()
-        (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
-            ?.clearAllSessions()
+        if (keyManager.isRotationConfirmedByServer()) {
+            keyManager.promoteStagedKeys()
+            keyManager.clearSessionCache()
+            (cryptoEngine as? com.chatcontroll.app.crypto.ratchet.RatchetSessionManager)
+                ?.clearAllSessions()
+        } else {
+            keyManager.clearStagedKeys()
+        }
     }
 
     override suspend fun getIdentity(): Identity? {
@@ -324,7 +332,9 @@ class IdentityRepositoryImpl @Inject constructor(
             throw e
         }
 
-        // Server accepted — promote staged keys to active
+        // Server accepted — mark confirmed (persisted synchronously) so crash
+        // recovery knows the server has the new keys, then promote.
+        keyManager.markRotationConfirmedByServer()
         keyManager.promoteStagedKeys()
         keyManager.storeShareCode(response.shareCode)
 
