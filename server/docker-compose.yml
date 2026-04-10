@@ -14,6 +14,25 @@ services:
       timeout: 3s
       retries: 5
 
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/turnserver.conf:ro
+    command: >
+      sh -c 'EXTERNAL_IP=$$(wget -qO- --header="Metadata-Flavor: Google"
+      http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip
+      2>/dev/null || echo "${TURN_RELAY_IP}")
+      && exec turnserver -c /etc/turnserver.conf
+      --static-auth-secret=${TURN_SECRET:?Set TURN_SECRET in .env}
+      $${EXTERNAL_IP:+--external-ip=$$EXTERNAL_IP}'
+    healthcheck:
+      test: ["CMD-SHELL", "turnutils_peer -L 127.0.0.1 -p 3478 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   server:
     build: .
     restart: unless-stopped
@@ -21,11 +40,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://chatcontroll:${POSTGRES_PASSWORD}@db/chatcontroll
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       FIREBASE_CREDENTIALS: ${FIREBASE_CREDENTIALS:-}
-      TURN_ENABLED: ${TURN_ENABLED:-false}
-      TURN_RELAY_IP: ${TURN_RELAY_IP:-127.0.0.1}
+      TURN_RELAY_IP: ${TURN_RELAY_IP:-}
       TURN_SECRET: ${TURN_SECRET:-}
-      TURN_USERNAME: ${TURN_USERNAME:-}
-      TURN_PASSWORD: ${TURN_PASSWORD:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       MAX_MESSAGES_PER_MINUTE: ${MAX_MESSAGES_PER_MINUTE:-60}
       DEBUG: "false"

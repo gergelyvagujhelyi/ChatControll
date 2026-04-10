@@ -16,13 +16,12 @@ The server NEVER:
 """
 
 import logging
-import socket
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_ENABLED, TURN_RELAY_IP, TURN_SECRET
+from app.config import CORS_ORIGINS, DEBUG, MAX_REQUEST_BODY_BYTES, METRICS_TOKEN, TURN_RELAY_IP, TURN_SECRET
 from sqlalchemy import text
 
 from app.database import async_session, engine
@@ -53,16 +52,6 @@ else:
     _handler = logging.StreamHandler()
     _handler.setFormatter(_JsonFormatter())
     logging.basicConfig(level=logging.INFO, handlers=[_handler])
-
-
-def _get_local_ip() -> str:
-    """Get the machine's LAN IP address."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
 
 
 async def _run_alembic_upgrade() -> None:
@@ -115,31 +104,42 @@ async def _run_alembic_upgrade() -> None:
     await loop.run_in_executor(None, _upgrade)
 
 
+async def _detect_gcp_external_ip() -> str:
+    """Query the GCP metadata server for this instance's external IP."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            resp = await client.get(
+                "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            resp.raise_for_status()
+            return resp.text.strip()
+    except Exception:
+        logging.getLogger(__name__).debug("GCP metadata lookup failed, TURN relay IP not auto-detected")
+        return ""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start services and run database migrations."""
     await _run_alembic_upgrade()
 
-    turn_transport = None
-    if TURN_ENABLED:
-        if not TURN_SECRET:
-            logging.getLogger(__name__).error(
-                "TURN_ENABLED=true but TURN_SECRET is not set. "
-                "Set TURN_SECRET or disable TURN with TURN_ENABLED=false."
-            )
-        else:
-            from app.services.turn_server import start_turn_server
-            try:
-                turn_transport = await start_turn_server(relay_ip=TURN_RELAY_IP)
-                app.state.turn_relay_ip = TURN_RELAY_IP
-            except Exception as e:
-                logging.getLogger(__name__).warning("TURN server failed to start: %s", e)
+    # TURN is handled by the coturn Docker container; the app server
+    # only needs the relay IP to build ICE server responses.
+    turn_ip = TURN_RELAY_IP
+    if not turn_ip:
+        turn_ip = await _detect_gcp_external_ip()
+    if turn_ip and TURN_SECRET:
+        app.state.turn_relay_ip = turn_ip
+    elif TURN_SECRET:
+        logging.getLogger(__name__).warning(
+            "TURN_SECRET is set but no relay IP found; TURN relay will be disabled."
+        )
 
     yield
 
     await ws_manager.shutdown()
-    if turn_transport:
-        turn_transport.close()
     await engine.dispose()
 
 
