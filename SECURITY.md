@@ -6,12 +6,18 @@
 ```
 shared_secret = HKDF-SHA256(
     IKM = X25519(local_priv, remote_pub) || ML-KEM-768.Encapsulate(remote_ek),
-    salt = "ChatControll-v1-session",
+    salt = "ChatControll-v1-ratchet-init",
     info = "hybrid-key-establishment",
+    length = 32
+)
+chain_material = HKDF-SHA256(
+    IKM = shared_secret,
+    salt = "ChatControll-v1-chains",
+    info = "bidirectional-chains",
     length = 64
 )
-send_key = shared_secret[0:32]
-recv_key = shared_secret[32:64]
+send_key = chain_material[0:32]   (initiator)
+recv_key = chain_material[32:64]  (initiator)
 ```
 
 - **Classical component**: X25519 (Curve25519 ECDH). Well-vetted, widely deployed.
@@ -181,7 +187,7 @@ Call signaling has been progressively hardened:
 
 ### Security Hardening (v0.3.10 / server v0.3.5)
 - **Key material zeroization**: Private signing keys, PQC decapsulation keys, classical/PQC shared secrets, HKDF inputs, and chain material are zeroized after use to limit lifetime in memory.
-- **Ratchet state rollback**: Encrypt/decrypt snapshot persisted state before mutation; rollback uses the snapshot instead of re-reading from disk (which could itself fail).
+- **Ratchet state invalidation on failure**: If persistence fails after ratchet mutation, the session is invalidated (removed from memory and disk) to force re-establishment, preventing key/nonce reuse.
 - **Ratchet header validation**: `messageNumber` and `previousChainLength` from untrusted input are validated as non-negative before use.
 - **PQC downgrade on failure**: If KEM ciphertext is present but session re-establishment fails, the message is rejected rather than silently falling back to classical-only keys.
 - **Server TOCTOU fix**: Message queue depth check uses `FOR UPDATE` row lock on the recipient's Identity to prevent concurrent requests bypassing `MAX_PENDING_MESSAGES_PER_USER`.
@@ -195,7 +201,7 @@ Call signaling has been progressively hardened:
 - **Late call_answer rejection**: The `call_answer` handler now checks for terminal call status, preventing a queued answer from reviving a call the user already hung up.
 - **SPKI OID validation**: Server-side ML-DSA-65 SPKI header parsing now validates the OID bytes, not just length, preventing garbage SPKI headers from being accepted.
 - **PQC signing key persistence**: Contact PQC signing keys are now stored during session upgrade in `tryEstablishSession`, closing a gap where PQC signatures were never verified for contacts upgraded via inbound messages.
-- **Control message retry on PQC sig missing**: Control messages (session_reset, account_deleted) with missing PQC signatures are no longer permanently ACK'd — they are skipped for retry on next sync, handling the key propagation race.
+- **Control message retry on PQC sig missing**: Control messages (session_reset, account_deleted) with missing PQC signatures are skipped for retry on next sync to handle the key propagation race. Since v0.4.1, retries are bounded by `MAX_PQC_SIG_MISS_RETRIES` (3) to prevent infinite retry loops.
 - **Process kill after wipe**: `wipeLocal()` now calls `exitProcess(0)` after database close to prevent the dead `@Singleton AppDatabase` from crashing subsequent DAO access.
 - **ML-DSA private key cleanup**: `BouncyCastlePqcProvider.sign()` now calls `tryDestroy()` on the reconstructed private key JCA object.
 - **Auth token deduplication**: Dual-signed token generation extracted from `KtorApiService`/`WebSocketClient` into `KeyManager.generateAuthToken()` to prevent implementations drifting apart.
