@@ -123,12 +123,12 @@ async def _detect_gcp_external_ip() -> str:
 
 async def _purge_expired_messages() -> None:
     """Periodically delete pending messages older than PENDING_MESSAGE_TTL_DAYS."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.db import PendingMessage
     logger = logging.getLogger(__name__)
     while True:
         await asyncio.sleep(3600)  # run once per hour
         try:
-            from datetime import datetime, timedelta, timezone
-            from app.models.db import PendingMessage
             cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=PENDING_MESSAGE_TTL_DAYS)
             async with async_session() as db:
                 result = await db.execute(
@@ -139,7 +139,7 @@ async def _purge_expired_messages() -> None:
                     logger.info("Purged %d expired pending messages (older than %d days)",
                                 result.rowcount, PENDING_MESSAGE_TTL_DAYS)
         except Exception:
-            logger.warning("Failed to purge expired pending messages")
+            logger.exception("Failed to purge expired pending messages")
 
 
 @asynccontextmanager
