@@ -97,6 +97,14 @@ class MessageRepositoryImpl @Inject constructor(
                 .map { it.key }
             keysToEvict.forEach { pqcSigMissCounts.remove(it) }
         }
+        if (ctrlPqcSigMissCounts.size > PRUNE_THRESHOLD) {
+            val evictCount = ctrlPqcSigMissCounts.size - PRUNE_THRESHOLD
+            val keysToEvict = ctrlPqcSigMissCounts.entries.toList()
+                .sortedBy { it.value }
+                .take(evictCount)
+                .map { it.key }
+            keysToEvict.forEach { ctrlPqcSigMissCounts.remove(it) }
+        }
         if (sessionResetSentTo.size > PRUNE_THRESHOLD) {
             sessionResetSentTo.clear()
         }
